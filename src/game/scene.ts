@@ -1,12 +1,13 @@
 import Phaser from 'phaser'
 import { ELITE_RULES, GameModel, STAGES, WORLD, type Actor, type Control } from './model'
 import { DIRECTIONS, HERO_FRAME_SIZE, MONSTER_FRAME_SIZE, PROJECTILE_FRAME_SIZE, HeroAnimator, MonsterAnimator, TEAM_COLORS, devolutionPose, eliteSlamPose, hitReaction, projectileFrame } from './animation'
+import { loadRatio } from './loading'
 
 type ActorVisual={body:Phaser.GameObjects.Sprite;outline:Phaser.GameObjects.Sprite;wash:Phaser.GameObjects.Sprite;badge?:Phaser.GameObjects.Text;shell?:{sprite:Phaser.GameObjects.Sprite;width:number;height:number};elite:boolean;animation:MonsterAnimator;attackSeq:number;x:number;y:number}
 const CITY_SECTIONS=['west','central','east'] as const
 const CITY_ROWS=['top','bottom'] as const
 
-export type GameBridge = { model: GameModel; onChange: () => void; onReady: () => void; onPause: () => void; muted: () => boolean; move: { x:number;y:number;dash:boolean;fire:boolean } }
+export type GameBridge = { model: GameModel; onChange: () => void; onReady: () => void; onProgress: (ratio:number) => void; onPause: () => void; muted: () => boolean; move: { x:number;y:number;dash:boolean;fire:boolean } }
 export class StreetScene extends Phaser.Scene {
   bridge: GameBridge
   private actors = new Map<number, ActorVisual>()
@@ -53,6 +54,18 @@ export class StreetScene extends Phaser.Scene {
     this.load.spritesheet('hero-attack',`${assets}hero-attack.webp`,{frameWidth:HERO_FRAME_SIZE,frameHeight:HERO_FRAME_SIZE})
     this.load.spritesheet('projectiles',`${assets}projectiles.webp`,{frameWidth:PROJECTILE_FRAME_SIZE,frameHeight:PROJECTILE_FRAME_SIZE})
     for(const kind of ['melee','ranged','elite'])this.load.spritesheet(`monster-${kind}`,`${assets}monster-${kind}.webp`,{frameWidth:MONSTER_FRAME_SIZE,frameHeight:MONSTER_FRAME_SIZE})
+    // Progress = completed + failed + fractional progress of the files still in flight,
+    // divided by the fixed preload total. Summing bytes instead would let an early-finishing
+    // large map inflate the ratio and then force it back down as other files declare their size.
+    let reported=-1
+    const report=()=>{
+      const ratio=loadRatio(this.load.totalComplete,this.load.totalFailed,this.load.inflight.getArray().map(file=>file.percentComplete),this.load.totalToLoad)
+      if((ratio>=1&&reported<1)||ratio-reported>=.01){reported=ratio;this.bridge.onProgress(ratio)}
+    }
+    this.load.on('fileprogress',report)
+    this.load.on('filecomplete',report)
+    this.load.on('loaderror',report)
+    this.load.once('complete',()=>{if(reported<1)this.bridge.onProgress(1)})
   }
   create() {
     const {model}=this.bridge
