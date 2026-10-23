@@ -46,6 +46,8 @@ npm run build -- --base=/games/xiaoqiang/
 - `assets/source/`：生成原图；`public/assets/`：部署用地图和透明 Sprite。
 - `docs/asset-prompts.md`：内置 imagegen 的完整提示词与素材来源。
 - `scripts/prepare-assets.mjs`：原图切片及压缩，可重复运行。
+- `scripts/prepare-animation-assets.mjs`：生成图切成 8 方向行走（每方向 6 帧）、攻击（每方向 4 帧）及三类投射物（各 6 帧）图集，统一人物比例与脚底位置；原图和完整提示词在 `assets/source/`。
+- `src/game/animation.ts`：朝向、行走/攻击状态及投射物帧选择；动画跟随战斗暂停，冲刺加快步频。
 - `tests/game.test.ts`：手动触发与冷却、自动瞄准、合成封顶、满编合成、暂停、碰撞、胜利与完整时长压力测试。
 
 本游戏无后端、无账号、无付费、无数据上传。声音偏好仅保存在浏览器本地；关闭标签页不保留本局进度。Phaser 在进入页面后异步加载。
