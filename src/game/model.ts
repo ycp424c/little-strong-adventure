@@ -71,6 +71,7 @@ export class GameModel {
   togglePause() { if(this.status==='running')this.status='paused';else if(this.status==='paused')this.status='running' }
   text(x:number,y:number,text:string,color='#f5d65b',life=1.4) {this.effects.push({x,y,text,color,life,max:life})}
   spawnEnemy(kind?: Kind, x?: number, y?: number, elite=false) {
+    if(this.enemies.length>=85)return
     const a=this.random()*Math.PI*2
     let sx=x??clamp(this.player.x+Math.cos(a)*650,60,WORLD.width-60)
     let sy=y??clamp(this.player.y+Math.sin(a)*440,60,WORLD.height-60)

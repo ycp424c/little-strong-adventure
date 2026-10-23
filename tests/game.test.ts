@@ -47,6 +47,10 @@ test('家门在十分钟前锁定，满十分钟抵达后胜利',()=>{
   const m=new GameModel();m.start();m.enemies=[];m.player.x=4820;m.time=599;m.update(.05,idle)
   assert.notEqual(m.status,'won');m.time=600;m.update(.05,idle);assert.equal(m.status,'won')
 })
+test('街区精英和怪物潮同时触发时也遵守敌人数量上限',()=>{
+  const m=new GameModel(()=>.5);m.start();for(let i=0;i<100;i++)m.spawnEnemy()
+  assert.equal(m.enemies.length,85);m.time=239.99;m.update(.05,idle);assert.ok(m.enemies.length<=85)
+})
 test('十分钟压力流程：五段推进、精英刷新、敌群受限、全程无数值异常',()=>{
   let seed=17;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296}
   const m=new GameModel(random);m.start();m.player.hp=m.player.maxHp=100000;let sawElite=false,maxEnemies=0
