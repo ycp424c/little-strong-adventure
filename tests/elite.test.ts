@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ELITE_RULES, ENEMY_BULLET_LIMIT, GameModel, rangedSpawnChance } from '../src/game/model.ts'
-import { eliteSlamPose } from '../src/game/animation.ts'
+import { devolutionPose, eliteSlamPose } from '../src/game/animation.ts'
 
 const idle={x:0,y:0,fire:false,dash:false,rally:false}
 function arena(){const m=new GameModel(()=>.5);m.start();m.enemies=[];m.player.x=1600;m.player.y=900;return m}
@@ -24,21 +24,101 @@ test('敌群满员仍能定时生成精英，同时保持85敌人和3精英上�
   m.time=225.3;m.update(.01,idle);assert.equal(m.elitesSpawned,3);assert.ok(m.enemies.length<=85)
   assert.equal(m.spawnEnemy('melee',2000,900,true),undefined)
 })
-test('精英生命随时间与编队战力增加，捕获瞄准始终跳过精英',()=>{
+test('敌群满员刷新精英不会替换掉处于捕获保护期的退化怪',()=>{
+  const m=arena();for(let i=0;i<85;i++)m.spawnEnemy('melee',2000,900)
+  const weakened=m.enemies[0];Object.assign(weakened,{x:2200,weakened:ELITE_RULES.devolveGrace})
+  m.time=45;m.update(.01,idle)
+  assert.equal(m.enemies.length,85);assert.equal(m.elitesSpawned,1);assert.ok(m.enemies.includes(weakened))
+})
+test('精英生命随时间与编队战力增加，自动瞄准最近敌人包含精英',()=>{
   const {m,enemy}=brute(),initial=enemy.maxHp
-  assert.equal(m.weaponTarget,undefined)
+  assert.equal(m.weaponTarget!.enemy,enemy)
   const normal=m.spawnEnemy('ranged',2000,900)!;Object.assign(normal,{x:1800,y:900,cd:100})
-  assert.equal(m.weaponTarget!.enemy,normal)
+  assert.equal(m.weaponTarget!.enemy,enemy)
+  normal.x=1620;assert.equal(m.weaponTarget!.enemy,normal)
   m.time=180;m.recruit('ranged');m.recruit('ranged');m.recruit('ranged')
   const stronger=m.spawnEnemy('melee',2000,900,true)!
   assert.ok(stronger.maxHp>initial)
 })
-test('皮搋子击杀精英也不会捕获，击破奖励与普通怪收编分开',()=>{
+test('致命皮搋子命中只把精英退化为一级普通怪，下一次独立命中才捕获',()=>{
+  const {m,enemy}=brute();enemy.hp=.5;enemy.cd=100
+  enemy.tier=3;enemy.slam={phase:'windup',time:.3,x:enemy.x,y:enemy.y,radius:155}
+  m.bullets.push({id:999,x:enemy.x,y:enemy.y,vx:0,vy:0,life:1,team:'rope',damage:1,distance:0})
+  m.update(.01,idle)
+  assert.equal(m.captured,0);assert.equal(m.allies.length,0);assert.equal(m.elitesBroken,1)
+  assert.equal(m.enemies[0],enemy);assert.equal(enemy.elite,false);assert.equal(enemy.tier,1)
+  assert.equal(enemy.hp,1);assert.equal(enemy.maxHp,1);assert.equal(enemy.slam,undefined)
+  assert.equal(m.pickups.length,0);assert.equal(m.xp,4);assert.equal(m.kills,0)
+  // The returning killing rope must not recruit the newly exposed monster.
+  for(let i=0;i<20;i++)m.update(.01,idle)
+  assert.equal(m.captured,0);assert.equal(m.elitesBroken,1)
+  m.update(.01,{...idle,fire:true})
+  for(let i=0;i<15;i++)m.update(.01,idle)
+  assert.equal(m.captured,1);assert.equal(m.allies[0].tier,1);assert.equal(m.enemies.length,0)
+})
+test('每次普通出手只扣精英血量，不会提前捕获',()=>{
+  const {m,enemy}=brute();enemy.cd=100;const hp=enemy.hp
+  m.update(.01,{...idle,fire:true})
+  for(let i=0;i<20;i++)m.update(.01,idle)
+  assert.equal(enemy.hp,hp-1);assert.equal(m.captured,0);assert.equal(enemy.elite,true)
+})
+test('新精英等级对应存活僚机的最高等级，旧精英不随编队变化跳级',()=>{
+  const m=arena(),first=m.spawnEnemy('melee',2000,900,true)!
+  assert.equal(first.tier,1)
+  for(let i=0;i<3;i++)m.recruit('ranged')
+  const second=m.spawnEnemy('melee',2000,900,true)!
+  assert.equal(second.tier,2);assert.ok(second.maxHp>first.maxHp)
+  for(let i=0;i<6;i++)m.recruit('ranged')
+  const third=m.spawnEnemy('melee',2000,900,true)!
+  assert.equal(third.tier,3);assert.ok(third.maxHp>second.maxHp);assert.equal(first.tier,1)
+  m.allies[0].hp=0;assert.equal(m.eliteTier,1)
+})
+test('僚机破甲及同帧后续子弹都不会补刀退化怪，保护期内还能再次捕获',()=>{
+  const {m,enemy}=brute();enemy.hp=.5;enemy.cd=100;m.weaponCooldown=2.4
+  for(let i=0;i<4;i++)m.bullets.push({id:990+i,x:enemy.x,y:enemy.y,vx:0,vy:0,life:1,team:'ally',damage:1,distance:0})
+  m.update(.01,idle)
+  assert.equal(enemy.elite,false);assert.equal(enemy.hp,1);assert.equal(m.elitesBroken,1)
+  m.recruit('ranged',enemy.x,enemy.y)
+  const hp=enemy.hp
+  for(let i=0;i<250;i++){
+    if(m.status==='upgrade')m.chooseUpgrade(m.upgradeChoices[0].id)
+    m.update(.01,idle)
+  }
+  assert.equal(enemy.hp,hp);assert.equal(m.enemies.includes(enemy),true)
+  m.update(.01,{...idle,fire:true});for(let i=0;i<20;i++)m.update(.01,idle)
+  assert.equal(m.captured,2);assert.equal(m.elitesBroken,1)
+})
+test('退化变形和捕获保护跟随暂停冻结，动画结束恢复正常比例',()=>{
   const {m,enemy}=brute();enemy.hp=.5;enemy.cd=100
   m.bullets.push({id:999,x:enemy.x,y:enemy.y,vx:0,vy:0,life:1,team:'rope',damage:1,distance:0})
   m.update(.01,idle)
-  assert.equal(m.captured,0);assert.equal(m.allies.length,0);assert.equal(m.eliteKills,1)
-  assert.equal(m.enemies.length,0);assert.equal(m.pickups.length,1);assert.equal(m.xp,4)
+  const initial=devolutionPose(enemy.weakened)
+  assert.equal(initial.progress,0);assert.equal(initial.bodyAlpha,0);assert.equal(initial.shellAlpha,1)
+  m.togglePause();for(let i=0;i<30;i++)m.update(.05,idle)
+  assert.deepEqual(devolutionPose(enemy.weakened),initial)
+  m.togglePause();for(let i=0;i<15;i++)m.update(.05,idle)
+  const settled=devolutionPose(enemy.weakened)
+  assert.equal(settled.progress,1);assert.equal(settled.bodyScale,1);assert.equal(settled.shellAlpha,0)
+})
+test('退化保护结束后普通怪不再免疫僚机伤害',()=>{
+  const {m,enemy}=brute();enemy.hp=.5;enemy.cd=100;m.weaponCooldown=100
+  m.bullets.push({id:999,x:enemy.x,y:enemy.y,vx:0,vy:0,life:1,team:'ally',damage:1,distance:0})
+  m.update(.01,idle)
+  for(let i=0;i<66;i++)m.update(.05,idle)
+  assert.equal(enemy.weakened,0)
+  m.bullets.push({id:1000,x:enemy.x,y:enemy.y,vx:0,vy:0,life:1,team:'ally',damage:1,distance:0})
+  m.update(.01,idle)
+  assert.ok(!m.enemies.includes(enemy));assert.equal(m.kills,1)
+})
+test('精英等级实际影响砸地范围和伤害',()=>{
+  const samples=[]
+  for(const tier of [1,2,3]){
+    const {m,enemy}=brute();enemy.tier=tier;m.update(.01,idle)
+    const radius=enemy.slam!.radius;enemy.slam!.time=1.19;m.update(.02,idle)
+    samples.push({radius,damage:100-m.player.hp})
+  }
+  assert.ok(samples[1].radius>samples[0].radius&&samples[2].radius>samples[1].radius)
+  assert.ok(samples[1].damage>samples[0].damage&&samples[2].damage>samples[1].damage)
 })
 test('武器就绪不会为精英保留靶位，僚机仍会主动输出',()=>{
   const {m,enemy}=brute();enemy.x=1800;enemy.cd=100;m.recruit('ranged')

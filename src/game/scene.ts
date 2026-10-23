@@ -1,8 +1,10 @@
 import Phaser from 'phaser'
 import { ELITE_RULES, GameModel, STAGES, WORLD, type Actor, type Control } from './model'
-import { DIRECTIONS, HERO_FRAME_SIZE, MONSTER_FRAME_SIZE, PROJECTILE_FRAME_SIZE, HeroAnimator, MonsterAnimator, TEAM_COLORS, eliteSlamPose, hitReaction, projectileFrame } from './animation'
+import { DIRECTIONS, HERO_FRAME_SIZE, MONSTER_FRAME_SIZE, PROJECTILE_FRAME_SIZE, HeroAnimator, MonsterAnimator, TEAM_COLORS, devolutionPose, eliteSlamPose, hitReaction, projectileFrame } from './animation'
 
-type ActorVisual={body:Phaser.GameObjects.Sprite;outline:Phaser.GameObjects.Sprite;wash:Phaser.GameObjects.Sprite;badge?:Phaser.GameObjects.Text;animation:MonsterAnimator;attackSeq:number;x:number;y:number}
+type ActorVisual={body:Phaser.GameObjects.Sprite;outline:Phaser.GameObjects.Sprite;wash:Phaser.GameObjects.Sprite;badge?:Phaser.GameObjects.Text;shell?:{sprite:Phaser.GameObjects.Sprite;width:number;height:number};elite:boolean;animation:MonsterAnimator;attackSeq:number;x:number;y:number}
+const CITY_SECTIONS=['west','central','east'] as const
+const CITY_ROWS=['top','bottom'] as const
 
 export type GameBridge = { model: GameModel; onChange: () => void; onReady: () => void; onPause: () => void; muted: () => boolean; move: { x:number;y:number;dash:boolean;fire:boolean } }
 export class StreetScene extends Phaser.Scene {
@@ -46,7 +48,7 @@ export class StreetScene extends Phaser.Scene {
   }
   preload() {
     const assets=`${import.meta.env.BASE_URL}assets/`
-    this.load.image('city',`${assets}city.webp`)
+    for(const section of CITY_SECTIONS)for(const row of CITY_ROWS)this.load.image(`city-${section}-${row}`,`${assets}city-${section}-${row}.webp`)
     this.load.spritesheet('hero-walk',`${assets}hero-walk.webp`,{frameWidth:HERO_FRAME_SIZE,frameHeight:HERO_FRAME_SIZE})
     this.load.spritesheet('hero-attack',`${assets}hero-attack.webp`,{frameWidth:HERO_FRAME_SIZE,frameHeight:HERO_FRAME_SIZE})
     this.load.spritesheet('projectiles',`${assets}projectiles.webp`,{frameWidth:PROJECTILE_FRAME_SIZE,frameHeight:PROJECTILE_FRAME_SIZE})
@@ -54,7 +56,8 @@ export class StreetScene extends Phaser.Scene {
   }
   create() {
     const {model}=this.bridge
-    this.add.image(WORLD.width/2,WORLD.height/2,'city').setDisplaySize(WORLD.width,WORLD.height).setDepth(-10)
+    const sectionWidth=WORLD.width/CITY_SECTIONS.length,rowHeight=WORLD.height/CITY_ROWS.length
+    CITY_SECTIONS.forEach((section,i)=>CITY_ROWS.forEach((row,j)=>this.add.image(i*sectionWidth,j*rowHeight,`city-${section}-${row}`).setOrigin(0).setDisplaySize(sectionWidth,rowHeight).setDepth(-10)))
     const shade=this.add.graphics().setDepth(-9)
     shade.fillStyle(0x203a32,.12);shade.fillRect(0,0,WORLD.width,WORLD.height)
     // These in-world labels keep map art free of AI-generated lettering.
@@ -81,7 +84,7 @@ export class StreetScene extends Phaser.Scene {
       this.input.keyboard.addCapture(['UP','DOWN','LEFT','RIGHT','SPACE'])
     }
     this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>{if(pointer.leftButtonDown()&&this.bridge.model.status==='running')this.captureRequested=true})
-    this.game.canvas.setAttribute('aria-label','小强历险记游戏画面，WASD 或方向键移动，F 或鼠标左键手动捕获最近的普通敌人，震地精英无法捕获，离开红圈躲避砸地')
+    this.game.canvas.setAttribute('aria-label','小强历险记游戏画面，WASD 或方向键移动，F 或鼠标左键攻击最近敌人；精英先扣血破甲，退化为一级普通怪后再次命中才能捕获，离开红圈躲避砸地')
     this.game.canvas.setAttribute('role','img')
     this.game.events.on('reset',this.reset,this)
     this.events.once('shutdown',()=>{this.game.events.off('reset',this.reset,this);this.audio?.close()})
@@ -104,14 +107,14 @@ export class StreetScene extends Phaser.Scene {
     try{
       this.audio??=new AudioContext();if(this.audio.state==='suspended')void this.audio.resume()
       const osc=this.audio.createOscillator(),gain=this.audio.createGain(),now=this.audio.currentTime
-      const freq:Record<string,number>={shot:170,capture:660,merge:880,hurt:100,upgrade:1040,dash:260,elite:90,slam:55,eliteDown:530}
+      const freq:Record<string,number>={shot:170,capture:660,merge:880,hurt:100,upgrade:1040,dash:260,elite:90,slam:55,eliteBreak:530}
       osc.type=event==='hurt'?'sawtooth':'sine';osc.frequency.setValueAtTime(freq[event]??440,now);osc.frequency.exponentialRampToValueAtTime(event==='shot'?80:(freq[event]??440)*1.5,now+.12)
       gain.gain.setValueAtTime(event==='shot'?.014:.045,now);gain.gain.exponentialRampToValueAtTime(.001,now+.15)
       osc.connect(gain);gain.connect(this.audio.destination);osc.start();osc.stop(now+.16)
     }catch{/* Gameplay remains available if audio is unsupported. */}
   }
   private destroyActorVisual(visual:ActorVisual) {
-    visual.body.destroy();visual.outline.destroy();visual.wash.destroy();visual.badge?.destroy()
+    visual.body.destroy();visual.outline.destroy();visual.wash.destroy();visual.badge?.destroy();visual.shell?.sprite.destroy()
   }
   private drawGroundAttacks() {
     const ground=this.groundFx
@@ -142,19 +145,30 @@ export class StreetScene extends Phaser.Scene {
     let visual=this.actors.get(a.id)
     if(!visual){
       const texture=a.elite?'monster-elite':`monster-${a.kind}`
-      visual={outline:this.add.sprite(a.x,a.y,texture),body:this.add.sprite(a.x,a.y,texture),wash:this.add.sprite(a.x,a.y,texture),animation:new MonsterAnimator(),attackSeq:0,x:a.x,y:a.y};this.actors.set(a.id,visual)
-      if(a.elite)visual.badge=this.add.text(a.x,a.y-146,'震地精英 · 无法捕获',{fontFamily:'"PingFang SC",sans-serif',fontSize:'11px',fontStyle:'bold',color:'#ffe0a3',stroke:'#392922',strokeThickness:4}).setOrigin(.5).setDepth(35)
+      visual={outline:this.add.sprite(a.x,a.y,texture),body:this.add.sprite(a.x,a.y,texture),wash:this.add.sprite(a.x,a.y,texture),elite:!!a.elite,animation:new MonsterAnimator(),attackSeq:0,x:a.x,y:a.y};this.actors.set(a.id,visual)
     }
+    if(visual.elite&&!a.elite){
+      const sprite=this.add.sprite(a.x,a.y,'monster-elite',visual.body.frame.name).setOrigin(visual.body.originX,visual.body.originY).setTint(0xffc789)
+      visual.shell={sprite,width:visual.body.displayWidth,height:visual.body.displayHeight}
+      visual.animation=new MonsterAnimator();visual.attackSeq=a.attackSeq
+    }
+    visual.elite=!!a.elite
+    if((a.elite||(a.weakened??0)>0)&&!visual.badge)visual.badge=this.add.text(a.x,a.y,'',{fontFamily:'"PingFang SC",sans-serif',fontSize:'11px',fontStyle:'bold',color:'#ffe0a3',stroke:'#392922',strokeThickness:4}).setOrigin(.5).setDepth(35)
+    if(!a.elite&&!(a.weakened??0)){visual.badge?.destroy();visual.badge=undefined}
     const pose=visual.animation.update(dt,{running,dx:a.x-visual.x,dy:a.y-visual.y,aimAngle:a.angle,attackAngle:a.attackSeq!==visual.attackSeq?a.angle:undefined})
     visual.x=a.x;visual.y=a.y;visual.attackSeq=a.attackSeq
-    const size=a.elite?212:ally?118+a.tier*12:132,color=ally?TEAM_COLORS.ally:TEAM_COLORS.enemy,depth=10+a.y*.001,slamPose=eliteSlamPose(a.slam)
+    const size=a.elite?194+a.tier*18:ally?118+a.tier*12:132,color=ally?TEAM_COLORS.ally:TEAM_COLORS.enemy,depth=10+a.y*.001,slamPose=eliteSlamPose(a.slam),devolve=devolutionPose(a.weakened)
     const frame=a.slam?DIRECTIONS.indexOf(pose.direction)*8+slamPose.frame:pose.frame,originY=a.elite?.67:.5
-    const hit=hitReaction(a.hit,a.hitAngle),x=a.x+hit.x,y=a.y+hit.y+slamPose.lift,texture=a.elite?'monster-elite':`monster-${a.kind}`,filled=this.fillTexture(texture,color),widthScale=slamPose.scaleX,heightScale=slamPose.scaleY
-    visual.outline.setTexture(filled,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale*1.08,size*heightScale*1.08).setPosition(x,y).setDepth(depth).setTintFill(color).setAlpha(ally?.85:.64)
-    visual.body.setTexture(hit.white?this.fillTexture(texture,0xffffff):texture,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale,size*heightScale).setPosition(x,y).setDepth(depth+.01)
+    const hit=hitReaction(a.hit,a.hitAngle),x=a.x+hit.x,y=a.y+hit.y+slamPose.lift,texture=a.elite?'monster-elite':`monster-${a.kind}`,filled=this.fillTexture(texture,color),widthScale=slamPose.scaleX*devolve.bodyScale,heightScale=slamPose.scaleY*devolve.bodyScale
+    visual.outline.setTexture(filled,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale*1.08,size*heightScale*1.08).setPosition(x,y).setDepth(depth).setTintFill(color).setAlpha((ally?.85:.64)*devolve.bodyAlpha)
+    visual.body.setTexture(hit.white?this.fillTexture(texture,0xffffff):texture,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale,size*heightScale).setPosition(x,y).setDepth(depth+.01).setAlpha(devolve.bodyAlpha)
     if(hit.white)visual.body.setTintFill(0xffffff);else visual.body.setTint(a.flash>0?0xffe9a4:ally?0xb3f3ff:0xffc3ae)
-    visual.wash.setTexture(filled,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale,size*heightScale).setPosition(x,y).setDepth(depth+.02).setTintFill(color).setAlpha(hit.white?0:ally?.4:.24)
-    visual.badge?.setPosition(a.x,a.y-146).setText(a.slam?.phase==='windup'?`重踏蓄力 · ${Math.max(0,ELITE_RULES.windup-a.slam.time).toFixed(1)}s`:'震地精英 · 无法捕获')
+    visual.wash.setTexture(filled,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale,size*heightScale).setPosition(x,y).setDepth(depth+.02).setTintFill(color).setAlpha((hit.white?0:ally?.4:.24)*devolve.bodyAlpha)
+    if(visual.shell){
+      if(devolve.progress>=1){visual.shell.sprite.destroy();visual.shell=undefined}
+      else {visual.shell.sprite.setPosition(a.x,a.y).setDisplaySize(visual.shell.width*devolve.shellScale,visual.shell.height*devolve.shellScale).setAlpha(devolve.shellAlpha).setDepth(depth+.03);this.fx.lineStyle(3*devolve.shellAlpha,0xffdc8a,devolve.shellAlpha);this.fx.strokeCircle(a.x,a.y,35+devolve.progress*65)}
+    }
+    visual.badge?.setPosition(a.x,a.y-(a.elite?size*.69:70)).setText(a.elite?(a.slam?.phase==='windup'?`Lv.${a.tier} 重踏 · ${Math.max(0,ELITE_RULES.windup-a.slam.time).toFixed(1)}s`:`Lv.${a.tier} 震地精英 · 先破甲`):'一级普通怪 · 可捕获')
     const width=size*.48
     this.fx.fillStyle(color,ally?.12:.07);this.fx.fillEllipse(a.x,a.y+24,width+12,23)
     this.fx.lineStyle(ally?2.5:1.5,color,ally?.95:.65)
@@ -164,7 +178,7 @@ export class StreetScene extends Phaser.Scene {
       this.fx.fillStyle(0x142e25,.8);this.fx.fillRoundedRect(a.x-19,a.y+32,38,4,2)
       this.fx.fillStyle(color,1);this.fx.fillRoundedRect(a.x-19,a.y+32,38*Math.max(0,a.hp/a.maxHp),4,2)
       for(let i=0;i<a.tier;i++){this.fx.fillStyle(a.tier===3?0xffda68:color);this.fx.fillCircle(a.x+(i-(a.tier-1)/2)*9,a.y-38,2.8)}
-    }else if(a.elite){this.fx.fillStyle(0x1c2725);this.fx.fillRoundedRect(a.x-42,a.y-132,84,6,2);this.fx.fillStyle(color);this.fx.fillRoundedRect(a.x-42,a.y-132,84*Math.max(0,a.hp/a.maxHp),6,2)}
+    }else if(a.elite){this.fx.fillStyle(0x1c2725);this.fx.fillRoundedRect(a.x-42,a.y-size*.62,84,6,2);this.fx.fillStyle(color);this.fx.fillRoundedRect(a.x-42,a.y-size*.62,84*Math.max(0,a.hp/a.maxHp),6,2)}
     if(pose.action==='attack'&&!a.elite){
       const attackAngle=DIRECTIONS.indexOf(pose.direction)*Math.PI/4
       this.fx.lineStyle(ally?3:2,color,.7)

@@ -1,0 +1,30 @@
+{
+  "tool": "built-in imagegen",
+  "reference": "assets/source/city.png",
+  "referenceSize": {
+    "width": 2172,
+    "height": 724
+  },
+  "grid": {
+    "columns": 3,
+    "rows": 2
+  },
+  "sections": [
+    "west",
+    "central",
+    "east"
+  ],
+  "rows": [
+    "top",
+    "bottom"
+  ],
+  "referenceCrops": {
+    "width": 724,
+    "height": 362
+  },
+  "tileSuffix": "\nTile ID: {section}-{row}. This identifier is not image text.",
+  "nativeTileSize": {
+    "width": 1774,
+    "height": 887
+  }
+}

@@ -1,9 +1,8 @@
 import sharp from 'sharp'
 import fs from 'node:fs/promises'
+import './prepare-map-assets.mjs'
 const root = new URL('../', import.meta.url)
-const city = new URL('assets/source/city.png',root).pathname
 const characters = new URL('assets/source/characters.png',root).pathname
-await sharp(city).webp({quality:88}).toFile(new URL('public/assets/city.webp',root).pathname)
 const {data,info}=await sharp(characters).ensureAlpha().raw().toBuffer({resolveWithObject:true})
 const projections=[]
 for(let x=0;x<info.width;x++){let n=0;for(let y=0;y<info.height;y++)if(data[(y*info.width+x)*4+3]>24)n++;projections.push(n)}

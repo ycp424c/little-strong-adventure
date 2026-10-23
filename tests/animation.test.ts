@@ -1,8 +1,29 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { DIRECTIONS, HeroAnimator, facing, projectileFrame } from '../src/game/animation.ts'
+import { DIRECTIONS, HeroAnimator, MonsterAnimator, facing, projectileFrame } from '../src/game/animation.ts'
 
 const idle={running:true,dx:0,dy:0,dashing:false}
+test('主角移动与瞄准在八个方向分界附近不闪换动画行，真实转向仍立即响应',()=>{
+  for(let i=0;i<8;i++)for(const moving of [false,true]){
+    const animation=new HeroAnimator(),center=i*Math.PI/4
+    const move=(angle:number)=>animation.update(.016,{...idle,dx:moving?Math.cos(angle)*3:0,dy:moving?Math.sin(angle)*3:0,aimAngle:angle})
+    move(center)
+    for(let j=0;j<40;j++)assert.equal(move(center+Math.PI/8+(j%2?1:-1)*.01).direction,DIRECTIONS[i])
+    assert.equal(move(center+Math.PI/8+.2).direction,DIRECTIONS[(i+1)%8])
+    for(let j=0;j<40;j++)assert.equal(move(center+Math.PI/8+(j%2?1:-1)*.01).direction,DIRECTIONS[(i+1)%8])
+    assert.equal(move(center).direction,DIRECTIONS[i])
+  }
+})
+test('怪物移动和静止瞄准都稳定跨越方向临界点，包含正负π接缝',()=>{
+  for(let i=0;i<8;i++)for(const moving of [false,true]){
+    const animation=new MonsterAnimator(),center=i*Math.PI/4
+    const aim=(angle:number)=>animation.update(.016,{running:true,dx:moving?Math.cos(angle)*3:0,dy:moving?Math.sin(angle)*3:0,aimAngle:angle})
+    aim(center)
+    for(let j=0;j<40;j++)assert.equal(aim(center+Math.PI/8+(j%2?1:-1)*.01).direction,DIRECTIONS[i])
+    assert.equal(aim(center+Math.PI/8+.2).direction,DIRECTIONS[(i+1)%8])
+    assert.equal(aim(center).direction,DIRECTIONS[i])
+  }
+})
 test('八方向朝向覆盖正交与斜向，角度跨越整圈仍正确',()=>{
   DIRECTIONS.forEach((direction,i)=>{
     for(const turns of [-3,0,3])assert.equal(facing(i*Math.PI/4+turns*2*Math.PI),direction)

@@ -14,6 +14,12 @@
 
 ## 城市地图
 
+当前游戏使用内置 imagegen 基于原图 `assets/source/city.png` 的六个 724×362 裁片重绘高清细节。最终源图为 `assets/source/city-hd-{west,central,east}-{top,bottom}.png`，每块原生 1774×887，总像素为 5322×1774。裁片参数与输出尺寸见 `assets/source/city-hd-prompts.json`；保持原道路、路口、建筑轮廓和俯视构图，仅提高瓦片、砖缝、路缘及路面纹理的清晰度。
+
+运行 `node scripts/prepare-map-assets.mjs` 生成六张 `public/assets/city-{west,central,east}-{top,bottom}.webp`，质量 94，不放大生成图。编码时以原图的连续像素锁定内部共享边缘，再在 40 像素内平滑过渡到高清细节，避免独立重绘的接缝。Phaser 按 3×2 网格铺满原 5400×1800 世界，不改变相机、碰撞或动画时序。低分辨率 `city.webp` 已停止发布。
+
+原始地图提示词：
+
 Use case: stylized-concept. Asset type: production background map for a TOP-DOWN 2D action videogame. Create an extremely wide 3:1 landscape, ideally 3072x1024. Orthographic bird's-eye view straight down, no isometric horizon. A richly illustrated small Chinese city neighborhood at golden evening, hand-painted indie game art with crisp ink outlines, muted sage green and petrol teal tiled rooftops, warm cream concrete sidewalks, charcoal gray asphalt, golden street lamps, small shop awnings, potted plants, parked scooters and compact cars, roof AC units. Precise playable layout: one completely clear WIDE horizontal main avenue across the entire image centered at y=512, asphalt from y=365 to y=659, sidewalks outside. Three perpendicular open streets cross at x=512,1536,2560, each about 180 px wide, extending top to bottom. Buildings occupy ONLY the rectangular blocks between streets. White zebra crossings at the intersections, dashed worn center lane markings. Large readable shapes, charming detail, subtly distressed screenprint textures, limited warm color palette. No characters or monsters, no HUD, NO readable text, no lettering, no frame. This is the actual tiled background in a game so the clear streets must remain navigable and unblocked, main road horizontally continuous from left edge to right edge.
 
 ## 人物 Sprite Sheet（透明背景）
@@ -28,7 +34,7 @@ Use case: stylized-concept. Asset type: four-character game sprite sheet with AC
 - `assets/source/monster-ranged.png`：远程暗影怪，方向和列布局相同，攻击为聚能、蓄势、前伸施法、收势。
 - `node scripts/prepare-animation-assets.mjs` 同时处理怪物图集，按完整透明连通轮廓提取每帧，统一角色比例与脚底锚点，输出 `public/assets/monster-melee.webp` 和 `public/assets/monster-ranged.webp`；每帧 256×256，每张 2048×2048，共 128 帧。原图和最终 WebP 均保存在项目中。
 
-青蓝/珊瑚红阵营描边与覆盖色、地面圆环/菱形、攻击弧线和受击光圈均在 Phaser 中绘制，不烘焙到图集。普通近战/远程怪物及其僚机共享两套动作图集；震地精英使用下文的独立图集，并通过体型、血条和无法捕获的标签区分。
+青蓝/珊瑚红阵营描边与覆盖色、地面圆环/菱形、攻击弧线和受击光圈均在 Phaser 中绘制，不烘焙到图集。普通近战/远程怪物及其僚机共享两套动作图集；震地精英使用下文的独立图集，并通过体型、血条和等级与先破甲的标签区分。
 
 Phaser WebGL 模式直接使用 tint；Canvas 回退模式在运行时缓存半分辨率纯色透明蒙版，保持阵营覆盖色与受击闪白一致，不增加下载资源。
 
@@ -37,3 +43,5 @@ Phaser WebGL 模式直接使用 tint；Canvas 回退模式在运行时缓存半�
 使用内置 imagegen 生成，以 `public/assets/elite.png` 为造型参考，提示词完整保存在 `assets/source/elite-animation-prompt.json`。新原图为 `assets/source/monster-elite.png`，处理后的部署图集为 `public/assets/monster-elite.webp`，每帧 256×256，8 列 × 8 行，共 64 帧。方向行顺序与普通怪物一致；每行前四列为行走，后四列依次为蓄力、双拳举过头顶、落拳砸地、收招。
 
 `eliteSlamPose` 按技能模拟时间选帧并连续计算抬升、拉伸、落地压缩与衰减回弹。地面固定红圈、倒计时扇形、收缩提示圈、冲击波、裂纹和尘屑由 Phaser Graphics 动态绘制；角色图集不包含地面和粒子，因此预警能与实际范围精确对应，暂停和升级时保持同步。Canvas 模式沿用运行时透明蒙版以保持阵营颜色和受击闪白一致。
+
+精英退化时复用已有精英和普通近战图集，通过 `devolutionPose` 计算 0.65 秒的残影散开、角色缩放与渐显，不新增位图。过渡和 3.2 秒捕获保护均由模型时间驱动；重开、捕获和移除时销毁临时残影与标签。

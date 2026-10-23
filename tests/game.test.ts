@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { GameModel, walkable, DURATION, STAGES, UPGRADES, type Kind } from '../src/game/model.ts'
+import { GameModel, walkable, DURATION, STAGES, UPGRADES, ELITE_RULES, type Kind } from '../src/game/model.ts'
 const idle={x:0,y:0,fire:false,dash:false,rally:false}
 function encounter(kind:Kind='melee',distance=150,hp=1){
   const m=new GameModel(()=>.5);m.start();m.enemies=[];m.player.x=1600;m.player.y=900
@@ -165,7 +165,7 @@ test('十分钟模拟稳定性：五段推进、精英刷新、敌群受限、�
   assert.equal(m.stage,4);assert.ok(sawElite);assert.ok(maxEnemies>10);assert.ok(m.time>=600)
   m.player.x=4820;m.player.y=900;if(m.status==='upgrade')m.chooseUpgrade(m.upgradeChoices[0].id);m.update(.05,idle);assert.equal(m.status,'won')
 })
-test('正常生命下捕获远程怪、躲避精英红圈和弹幕，可以完成十分钟回家流程',()=>{
+test('正常生命下选择伙伴、寻找稀缺补给并预判弹幕，可以完成十分钟回家流程',()=>{
   let seed=1
   const m=new GameModel(()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296})
   m.start()
@@ -179,6 +179,10 @@ test('正常生命下捕获远程怪、躲避精英红圈和弹幕，可以完�
       const dx=ranged.x-m.player.x,dy=ranged.y-m.player.y,distance=Math.hypot(dx,dy)
       if(distance<850){x=dx/(distance||1);y=dy/(distance||1);dash=distance>m.weaponRange&&distance<430}
     }
+    const supply=m.player.hp<m.player.maxHp*.7?m.pickups.slice().sort((a,b)=>Math.hypot(a.x-m.player.x,a.y-m.player.y)-Math.hypot(b.x-m.player.x,b.y-m.player.y))[0]:undefined
+    const weakened=m.enemies.filter(e=>(e.weakened??0)>0).sort((a,b)=>Math.hypot(a.x-m.player.x,a.y-m.player.y)-Math.hypot(b.x-m.player.x,b.y-m.player.y))[0]
+    const priority=supply??(m.weaponCooldown<.6&&m.allies.filter(a=>a.kind==='melee').length<2?weakened:undefined)
+    if(priority){const dx=priority.x-m.player.x,dy=priority.y-m.player.y,d=Math.hypot(dx,dy);if(d<1000){x=dx/(d||1);y=dy/(d||1);dash=d>220}}
     for(const enemy of m.enemies){
       const dx=m.player.x-enemy.x,dy=m.player.y-enemy.y,distance=Math.hypot(dx,dy)
       const margin=enemy.elite?240:85
@@ -191,21 +195,50 @@ test('正常生命下捕获远程怪、躲避精英红圈和弹幕，可以完�
       const dx=m.player.x-slam.x,dy=m.player.y-slam.y,d=Math.hypot(dx,dy)
       if(d<slam.radius+40){x=dx/(d||1)*5;y=dy/(d||1)*5;dash=slam.time>.65}
     }
-    for(const bullet of m.bullets){
-      if(bullet.team!=='enemy')continue
-      const dx=m.player.x-bullet.x,dy=m.player.y-bullet.y,speedSquared=bullet.vx**2+bullet.vy**2
-      const t=(dx*bullet.vx+dy*bullet.vy)/speedSquared
-      if(t<0||t>.7)continue
-      const px=m.player.x-(bullet.x+bullet.vx*t),py=m.player.y-(bullet.y+bullet.vy*t),d=Math.hypot(px,py)
-      if(d<48){const urgency=(48-d)/16;x+=px/(d||1)*urgency;y+=py/(d||1)*urgency;if(t<.2&&d<25)dash=true}
+    // Choose a short safe movement trajectory using visible projectiles and warning circles.
+    const directionLength=Math.hypot(x,y)||1,preferredX=x/directionLength,preferredY=y/directionLength,wantsDash=dash
+    const nearbyBullets=m.bullets.filter(b=>b.team==='enemy'&&Math.hypot(b.x-m.player.x,b.y-m.player.y)<550)
+    let best={score:Infinity,x,y,dash:false}
+    for(let heading=0;heading<16;heading++)for(const useDash of [false,true]){
+      if(useDash&&m.player.dashCd>0)continue
+      const cx=Math.cos(heading*Math.PI/8),cy=Math.sin(heading*Math.PI/8)
+      const burst=useDash?.19:m.player.dash
+      const point=(t:number)=>{const travel=190*(t+2.8*Math.min(t,burst));return {x:m.player.x+cx*travel,y:m.player.y+cy*travel}}
+      let score=(1-cx*preferredX-cy*preferredY)*4+(useDash?(wantsDash?-.6:1.8):0)
+      if([.15,.3,.6].some(t=>{const p=point(t);return !walkable(p.x,p.y)}))continue
+      for(const bullet of nearbyBullets){
+        let previous={x:m.player.x-bullet.x,y:m.player.y-bullet.y}
+        for(const t of [.15,.3,.45,.6]){
+          if(t>bullet.life)break
+          const p=point(t),relative={x:p.x-bullet.x-bullet.vx*t,y:p.y-bullet.y-bullet.vy*t}
+          const dx=relative.x-previous.x,dy=relative.y-previous.y,den=dx*dx+dy*dy
+          const along=den?Math.max(0,Math.min(1,-(previous.x*dx+previous.y*dy)/den)):0
+          const d=Math.hypot(previous.x+dx*along,previous.y+dy*along)
+          if(d<34)score+=80*(1-d/34)/(t+.1)
+          else if(d<60)score+=(60-d)/60
+          previous=relative
+        }
+      }
+      const end=point(.6)
+      for(const enemy of m.enemies){
+        if(enemy.elite&&enemy.slam?.phase==='windup'){
+          const until=ELITE_RULES.windup-enemy.slam.time
+          if(until<=.6){const p=point(Math.max(0,until));if(Math.hypot(p.x-enemy.slam.x,p.y-enemy.slam.y)<enemy.slam.radius+20)score+=500}
+        }else if(enemy.kind==='melee'&&!enemy.elite){
+          const d=Math.hypot(end.x-enemy.x,end.y-enemy.y)
+          if(d<100)score+=(100-d)/8
+        }
+      }
+      if(score<best.score)best={score,x:cx,y:cy,dash:useDash}
     }
+    x=best.x;y=best.y;dash=best.dash
     if(!walkable(m.player.x+x*8,m.player.y+y*8)){
       if(walkable(m.player.x+x*8,m.player.y))y=0
       else if(walkable(m.player.x,m.player.y+y*8))x=0
     }
     const aim=m.weaponTarget
     // 后退中的射手可能躲开射程末端的皮搋子，靠近后再出手，为飞行时间留出余量。
-    const fire=i%2===0&&m.weaponCooldown===0&&!!aim?.inRange&&((aim.enemy.kind==='ranged'&&aim.distance<m.weaponRange-60)||aim.distance<100||m.allies.length<2)
+    const fire=i%2===0&&m.weaponCooldown===0&&!!aim?.inRange&&(aim.enemy.elite||(aim.enemy.kind==='ranged'&&aim.distance<m.weaponRange-60)||((m.allies.filter(a=>a.kind==='melee').length<2||aim.distance<55)&&aim.distance<100)||m.allies.length<2)
     m.update(.05,{...idle,x:Math.max(-1,Math.min(1,x)),y:Math.max(-1,Math.min(1,y)),fire,dash})
   }
   assert.equal(m.status,'won');assert.ok(m.player.hp>0);assert.ok(m.time>=DURATION);assert.equal(m.visited.size,5)

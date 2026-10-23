@@ -15,6 +15,12 @@ const ATTACK_FRAME_TIME = .07
 export function facing(angle:number):Direction {
   return DIRECTIONS[(Math.round(angle/(Math.PI/4))%8+8)%8]
 }
+function stableFacing(angle:number,current:Direction):Direction {
+  const center=DIRECTIONS.indexOf(current)*Math.PI/4
+  const difference=Math.atan2(Math.sin(angle-center),Math.cos(angle-center))
+  // Six degrees of hysteresis stop tiny joystick/AI angle changes switching rows.
+  return Math.abs(difference)<=Math.PI/8+Math.PI/30?current:facing(angle)
+}
 
 export type MonsterPose = {action:'idle'|'walk'|'attack';direction:Direction;frame:number}
 export class MonsterAnimator {
@@ -26,7 +32,7 @@ export class MonsterAnimator {
     if(!input.running)return this.pose
     const moving=Math.hypot(input.dx,input.dy)>.01
     this.walkTime=moving?this.walkTime+dt:0
-    if(input.attackAngle!==undefined){this.direction=facing(input.attackAngle);this.attackTime=0}
+    if(input.attackAngle!==undefined){this.direction=stableFacing(input.attackAngle,this.direction);this.attackTime=0}
     else if(this.attackTime!==undefined)this.attackTime+=dt
     const row=()=>DIRECTIONS.indexOf(this.direction)*(MONSTER_WALK_FRAMES+MONSTER_ATTACK_FRAMES)
     if(this.attackTime!==undefined&&this.attackTime<.32){
@@ -34,13 +40,17 @@ export class MonsterAnimator {
       return this.pose
     }
     this.attackTime=undefined
-    this.direction=moving?facing(Math.atan2(input.dy,input.dx)):facing(input.aimAngle)
+    this.direction=stableFacing(moving?Math.atan2(input.dy,input.dx):input.aimAngle,this.direction)
     this.pose={action:moving?'walk':'idle',direction:this.direction,frame:row()+(moving?Math.floor(this.walkTime*10)%MONSTER_WALK_FRAMES:0)}
     return this.pose
   }
 }
 
 export const TEAM_COLORS={player:0xffdf78,ally:0x59e1ff,enemy:0xff735b} as const
+export function devolutionPose(remaining=0) {
+  const progress=Math.max(0,Math.min(1,(ELITE_RULES.devolveGrace-remaining)/ELITE_RULES.devolveAnimation)),ease=progress*progress*(3-2*progress)
+  return {progress,bodyScale:.75+.25*ease,bodyAlpha:Math.min(1,progress*1.8),shellScale:1+progress*.16,shellAlpha:1-progress}
+}
 export function eliteSlamPose(slam?:Slam) {
   if(!slam)return {frame:0,scaleX:1,scaleY:1,lift:0}
   if(slam.phase==='windup'){
@@ -74,15 +84,15 @@ export class HeroAnimator {
     if(!input.running)return this.pose
     const moving=Math.hypot(input.dx,input.dy)>.01
     this.walkTime=moving?this.walkTime+dt*(input.dashing?1.65:1):0
-    if(input.shotAngle!==undefined){this.direction=facing(input.shotAngle);this.attackTime=0}
+    if(input.shotAngle!==undefined){this.direction=stableFacing(input.shotAngle,this.direction);this.attackTime=0}
     else if(this.attackTime!==undefined)this.attackTime+=dt
     if(this.attackTime!==undefined&&this.attackTime<ATTACK_FRAMES*ATTACK_FRAME_TIME){
       this.pose={action:'attack',direction:this.direction,texture:'hero-attack',frame:DIRECTIONS.indexOf(this.direction)*ATTACK_FRAMES+Math.floor(this.attackTime/ATTACK_FRAME_TIME)}
       return this.pose
     }
     this.attackTime=undefined
-    if(moving)this.direction=facing(Math.atan2(input.dy,input.dx))
-    else if(input.aimAngle!==undefined)this.direction=facing(input.aimAngle)
+    if(moving)this.direction=stableFacing(Math.atan2(input.dy,input.dx),this.direction)
+    else if(input.aimAngle!==undefined)this.direction=stableFacing(input.aimAngle,this.direction)
     this.pose={action:moving?'walk':'idle',direction:this.direction,texture:'hero-walk',frame:DIRECTIONS.indexOf(this.direction)*WALK_FRAMES+(moving?Math.floor(this.walkTime*12)%WALK_FRAMES:0)}
     return this.pose
   }
