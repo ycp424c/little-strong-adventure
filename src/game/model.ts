@@ -1,6 +1,8 @@
 export type Kind = 'melee' | 'ranged'
 export type Status = 'ready' | 'running' | 'paused' | 'upgrade' | 'won' | 'lost'
-export type Actor = { id: number; x: number; y: number; hp: number; maxHp: number; kind: Kind; tier: number; cd: number; elite?: boolean; angle: number; flash: number; hit:number; hitAngle:number; attackSeq:number }
+export type Slam = {phase:'windup'|'recover';time:number;x:number;y:number;radius:number}
+export type Actor = { id: number; x: number; y: number; hp: number; maxHp: number; kind: Kind; tier: number; cd: number; elite?: boolean; angle: number; flash: number; hit:number; hitAngle:number; attackSeq:number; slam?:Slam }
+export type Shockwave = {id:number;x:number;y:number;radius:number;life:number;max:number}
 export type Impact = { id:number; x:number; y:number; angle:number; team:'player'|'ally'|'enemy'; life:number; max:number }
 export type Bullet = { id: number; x: number; y: number; vx: number; vy: number; life: number; team: 'rope' | 'enemy' | 'ally'; damage: number; returning?: boolean; distance: number }
 export type Effect = { x: number; y: number; text: string; color: string; life: number; max: number }
@@ -24,6 +26,9 @@ export const STAGES = [
 ]
 export const DURATION = 600
 export const WORLD = { width: 5400, height: 1800 }
+export const ELITE_RULES = {firstAt:45,interval:60,maxAlive:3,windup:1.2,recovery:.8} as const
+export const ENEMY_BULLET_LIMIT = 180
+export const rangedSpawnChance = (time:number) => Math.min(.7,.42+time/1300)
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v))
 const dist = (a: {x:number;y:number}, b: {x:number;y:number}) => Math.hypot(a.x-b.x, a.y-b.y)
 const allyHP = (kind: Kind, tier: number) => (kind === 'melee' ? 92 : 65) * [0, 1, 2.5, 6][tier]
@@ -45,10 +50,13 @@ export class GameModel {
   bullets: Bullet[] = []
   effects: Effect[] = []
   impacts: Impact[] = []
+  shockwaves: Shockwave[] = []
   pickups: {id:number;x:number;y:number;life:number}[] = []
   captured = 0
   merges = 0
   kills = 0
+  eliteKills = 0
+  elitesSpawned = 0
   level = 1
   xp = 0
   nextXp = 5
@@ -74,20 +82,24 @@ export class GameModel {
   private rallyTime = 0
   private dashMax = 3.7
   private wave = 0
+  private nextEliteAt:number = ELITE_RULES.firstAt
+  private enemyProjectileCount = 0
   random: () => number
   constructor(random: () => number = Math.random) { this.random=random }
   get weaponCooldownMax() { return this.shotInterval }
   get weaponRange() { return this.range }
+  get eliteCountdown() { return Math.max(0,this.nextEliteAt-this.time) }
   get weaponTarget(): WeaponTarget | undefined {
     let nearest: Actor | undefined, distance=Infinity
-    for(const enemy of this.enemies){const d=dist(enemy,this.player);if(enemy.hp>0&&d<distance){nearest=enemy;distance=d}}
+    for(const enemy of this.enemies){const d=dist(enemy,this.player);if(enemy.hp>0&&!enemy.elite&&d<distance){nearest=enemy;distance=d}}
     return nearest?{enemy:nearest,distance,inRange:distance<=this.range}:undefined
   }
   start() { if (this.status === 'ready') { this.status='running'; for(let i=0;i<4;i++)this.spawnEnemy(i%2 ? 'ranged':'melee',1100+i*95,850+(i%2)*100) } }
   togglePause() { if(this.status==='running')this.status='paused';else if(this.status==='paused')this.status='running' }
   text(x:number,y:number,text:string,color='#f5d65b',life=1.4) {this.effects.push({x,y,text,color,life,max:life})}
   spawnEnemy(kind?: Kind, x?: number, y?: number, elite=false) {
-    if(this.enemies.length>=85)return
+    if(this.enemies.length>=85&&!elite)return
+    if(elite&&this.enemies.filter(e=>e.elite&&e.hp>0).length>=ELITE_RULES.maxAlive)return
     const a=this.random()*Math.PI*2
     let spawn:{x:number;y:number}|undefined
     for(let attempt=0;attempt<12;attempt++){
@@ -96,9 +108,18 @@ export class GameModel {
       if(walkable(point.x,point.y)&&dist(point,this.player)>=290){spawn=point;break}
     }
     if(!spawn)return
-    elite=elite||(this.time>180&&this.random()<.02+this.time/12000)
-    const hp=elite?3+Math.floor(this.time/120):1
-    this.enemies.push({ id:++this.uid,...spawn,kind:kind??(this.random()<.28+this.time/1900?'ranged':'melee'),hp,maxHp:hp,tier:1,cd:1+this.random(),elite,angle:0,flash:0,hit:0,hitAngle:0,attackSeq:0 })
+    // A scheduled elite must not be starved by the normal-enemy population cap.
+    if(this.enemies.length>=85){
+      const removable=this.enemies.filter(e=>!e.elite&&e.id!==this.captureInFlightId).sort((a,b)=>dist(b,this.player)-dist(a,this.player))[0]
+      if(!removable)return
+      this.enemies=this.enemies.filter(e=>e!==removable)
+    }
+    const threat=this.allies.reduce((sum,a)=>sum+(a.kind==='melee'?[0,.65,1.5,3.5]:[0,1.1,2.8,6.5])[a.tier],0)*Math.pow(this.power,1.5)
+    const hp=elite?Math.ceil(48+this.time*.22+threat*8):1
+    const enemy:Actor={ id:++this.uid,...spawn,kind:elite?'melee':kind??(this.random()<rangedSpawnChance(this.time)?'ranged':'melee'),hp,maxHp:hp,tier:1,cd:elite?1.5:1+this.random(),elite,angle:0,flash:0,hit:0,hitAngle:0,attackSeq:0 }
+    this.enemies.push(enemy)
+    if(elite)this.elitesSpawned++
+    return enemy
   }
   recruit(kind: Kind, x=this.player.x, y=this.player.y) {
     this.captured++;this.xp++;this.kills++
@@ -155,13 +176,48 @@ export class GameModel {
   private hitEnemy(enemy:Actor,damage:number,capture:boolean,source:{x:number;y:number}) {
     if(enemy.hp<=0)return
     enemy.hp-=damage;this.impact(enemy,source,'enemy')
-    if(enemy.hp>0){this.text(enemy.x,enemy.y,enemy.elite?'护甲破裂':'命中','#f4a56c');return}
-    if(capture){this.recruit(enemy.kind,enemy.x,enemy.y);if(enemy.elite){this.player.hp=Math.min(this.player.maxHp,this.player.hp+18);this.text(enemy.x,enemy.y-45,'精英捕获 · 生命 +18')}}
-    else {this.kills++;this.xp+=.45;this.text(enemy.x,enemy.y,'+能量','#b5dbba',.65);if(this.random()<.08)this.pickups.push({id:++this.uid,x:enemy.x,y:enemy.y,life:22})}
+    if(enemy.hp>0){this.text(enemy.x,enemy.y,enemy.elite?(capture?'精英免疫捕获':'重甲命中'):'命中','#f4a56c',enemy.elite?.55:1.4);return}
+    if(capture&&!enemy.elite)this.recruit(enemy.kind,enemy.x,enemy.y)
+    else {
+      this.kills++;this.xp+=enemy.elite?4:.45
+      this.text(enemy.x,enemy.y,enemy.elite?'精英击破！':'+能量',enemy.elite?'#ffdc8a':'#b5dbba',enemy.elite?2:.65)
+      if(enemy.elite){this.eliteKills++;this.sounds.push('eliteDown')}
+      if(enemy.elite||this.random()<.08)this.pickups.push({id:++this.uid,x:enemy.x,y:enemy.y,life:22})
+    }
   }
   private fire(x:number,y:number,angle:number,team:Bullet['team'],damage=1) {
+    if(team==='enemy'){
+      if(this.enemyProjectileCount>=ENEMY_BULLET_LIMIT)return false
+      this.enemyProjectileCount++
+    }
     const speed=team==='rope'?850:team==='ally'?480:205+this.time*.08
     this.bullets.push({id:++this.uid,x,y,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed,team,damage,life:team==='rope'?3:3.1,distance:0})
+    return true
+  }
+  private updateElite(enemy:Actor,dt:number) {
+    const p=this.player
+    if(enemy.slam){
+      const slam=enemy.slam;slam.time+=dt
+      if(slam.phase==='windup'&&slam.time>=ELITE_RULES.windup){
+        slam.phase='recover';slam.time-=ELITE_RULES.windup;enemy.attackSeq++
+        this.shockwaves.push({id:++this.uid,x:slam.x,y:slam.y,radius:slam.radius,life:.65,max:.65})
+        if(dist(slam,p)<slam.radius+16)this.hurtPlayer(28+this.time*.012,slam)
+        for(const ally of this.allies)if(ally.hp>0&&dist(slam,ally)<slam.radius+16)this.hurtAlly(ally,24+this.time*.018,slam)
+        if(dist(enemy,p)<650)this.sounds.push('slam')
+      }else if(slam.phase==='recover'&&slam.time>=ELITE_RULES.recovery){
+        enemy.slam=undefined;enemy.cd=Math.max(3.7,4.8-this.time/800)
+      }
+      return
+    }
+    const distance=dist(enemy,p),radius=150+Math.min(35,this.time/18)
+    enemy.angle=Math.atan2(p.y-enemy.y,p.x-enemy.x)
+    if(distance<radius+45&&enemy.cd<=0){
+      // Commit to this ground position: the warning never follows a dodging player.
+      enemy.slam={phase:'windup',time:0,x:enemy.x,y:enemy.y,radius}
+      return
+    }
+    const speed=122*(1+this.time/1800)
+    this.move(enemy,Math.cos(enemy.angle)*speed,Math.sin(enemy.angle)*speed,dt,24)
   }
   update(dt:number,input:Control) {
     const firePressed=input.fire&&!this.fireHeld
@@ -172,6 +228,9 @@ export class GameModel {
     p.hit=Math.max(0,p.hit-dt)
     for(const impact of this.impacts)impact.life-=dt
     this.impacts=this.impacts.filter(impact=>impact.life>0)
+    for(const wave of this.shockwaves)wave.life-=dt
+    this.shockwaves=this.shockwaves.filter(wave=>wave.life>0)
+    this.enemyProjectileCount=this.bullets.filter(b=>b.team==='enemy'&&b.life>0).length
     for(const actor of [...this.enemies,...this.allies])actor.hit=Math.max(0,actor.hit-dt)
     p.invincible=Math.max(0,p.invincible-dt);p.dashCd=Math.max(0,p.dashCd-dt);p.rallyCd=Math.max(0,p.rallyCd-dt);p.dash=Math.max(0,p.dash-dt);this.rallyTime=Math.max(0,this.rallyTime-dt)
     const len=Math.hypot(input.x,input.y)||1
@@ -185,20 +244,29 @@ export class GameModel {
       if(aimTarget?.inRange){this.captureInFlightId=aimTarget.enemy.id;this.fire(p.x,p.y,p.angle,'rope');this.weaponCooldown=this.shotInterval;this.sounds.push('shot')}
       else this.text(p.x,p.y-12,aimTarget?'目标太远 · 先靠近':'走位寻找捕获目标','#e3d7b3',1)
     }
-    const reservedTarget=this.enemies.find(e=>e.id===this.captureInFlightId)??(this.weaponCooldown===0&&aimTarget&&aimTarget.distance<=this.range+200?aimTarget.enemy:undefined)
+    const reservedTarget=this.enemies.find(e=>!e.elite&&e.id===this.captureInFlightId)??(this.weaponCooldown===0&&aimTarget&&aimTarget.distance<=this.range+200?aimTarget.enemy:undefined)
     const stage=Math.min(4,Math.floor(this.time/120))
-    if(stage!==this.stage){this.stage=stage;this.message=`第 ${stage+1} 站 · ${STAGES[stage].name}`;this.messageUntil=this.time+6;for(let i=0;i<stage+1;i++)this.spawnEnemy('melee',undefined,undefined,true);this.sounds.push('upgrade')}
+    if(stage!==this.stage){this.stage=stage;this.message=`第 ${stage+1} 站 · ${STAGES[stage].name}`;this.messageUntil=this.time+6;this.sounds.push('upgrade')}
     const target=STAGES[stage]
     if(!this.visited.has(stage)&&Math.abs(p.x-target.x)<145&&Math.abs(p.y-900)<220){this.visited.add(stage);p.hp=Math.min(p.maxHp,p.hp+22);this.xp+=2;this.text(p.x,p.y-50,'街区补给 · 生命 +22','#c8e9b0',2.4)}
     this.spawnCd-=dt
-    if(this.spawnCd<=0){const count=1+Math.floor(this.time/110);for(let i=0;i<count;i++)if(this.enemies.length<85)this.spawnEnemy();this.spawnCd=Math.max(.48,1.9-this.time*.002)/(1+this.allies.length*.06)}
+    if(this.spawnCd<=0){const count=(this.time<20?1:2)+Math.floor(this.time/120);for(let i=0;i<count;i++)if(this.enemies.length<85)this.spawnEnemy();this.spawnCd=Math.max(.48,1.75-this.time*.0019)/(1+this.allies.length*.065)}
     const wave=Math.floor(this.time/60)
-    if(wave>this.wave){this.wave=wave;for(let i=0;i<5+stage*2;i++)if(this.enemies.length<85)this.spawnEnemy(undefined,undefined,undefined,i===0&&wave>1);if(wave%2===1){this.message='怪物潮来袭 · 保持移动！';this.messageUntil=this.time+5;this.sounds.push('upgrade')}}
+    if(wave>this.wave){this.wave=wave;const count=6+stage*2;for(let i=0;i<count;i++)if(this.enemies.length<85)this.spawnEnemy(i<Math.ceil(count*.6)?'ranged':undefined);if(wave%2===1){this.message='远程怪物潮 · 别停在弹幕里！';this.messageUntil=this.time+5;this.sounds.push('upgrade')}}
+    if(this.time>=this.nextEliteAt&&this.enemies.filter(e=>e.elite&&e.hp>0).length<ELITE_RULES.maxAlive){
+      const elite=this.spawnEnemy('melee',undefined,undefined,true)
+      if(elite){
+        this.nextEliteAt=this.time+ELITE_RULES.interval
+        for(let i=0;i<2+Math.floor(this.time/180);i++)this.spawnEnemy('ranged')
+        this.message='震地精英来袭 · 无法捕获，躲开红圈！';this.messageUntil=this.time+6;this.sounds.push('elite')
+      }
+    }
     this.pickupCd-=dt
     if(this.pickupCd<=0){this.pickupCd=32;this.pickups.push({id:++this.uid,x:clamp(p.x+180*(this.random()>.5?1:-1),80,5300),y:clamp(p.y+80*(this.random()>.5?1:-1),735,1065),life:30})}
     for(const e of this.enemies){
       if(e.hp<=0)continue
       e.flash=Math.max(0,e.flash-dt);e.cd-=dt
+      if(e.elite){this.updateElite(e,dt);continue}
       let target:{x:number;y:number;hp:number}=p,nd=dist(e,p)
       if(e.kind==='melee')for(const ally of this.allies){const d=dist(e,ally);if(ally.hp>0&&d<nd*.85){target=ally;nd=d}}
       e.angle=Math.atan2(target.y-e.y,target.x-e.x)
@@ -206,7 +274,10 @@ export class GameModel {
       if(e.kind==='melee'||nd>420||this.rallyTime>0)this.move(e,Math.cos(e.angle)*speed,Math.sin(e.angle)*speed,dt)
       else if(nd<365)this.move(e,-Math.cos(e.angle)*Math.min(175,speed*1.4),-Math.sin(e.angle)*Math.min(175,speed*1.4),dt)
       if(e.kind==='melee'&&nd<(e.elite?47:33)&&e.cd<=0){const damage=(e.elite?23:10)*(1+this.time/1200);if(target===p)this.hurtPlayer(damage,e);else this.hurtAlly(target as Actor,damage,e);e.cd=.95;e.attackSeq++}
-      if(e.kind==='ranged'&&nd<540&&e.cd<=0){this.fire(e.x,e.y,e.angle,'enemy',8);if(this.time>360){this.fire(e.x,e.y,e.angle+.18,'enemy',6);this.fire(e.x,e.y,e.angle-.18,'enemy',6)}e.cd=Math.max(1.25,2.5-this.time/800);e.attackSeq++}
+      if(e.kind==='ranged'&&nd<540&&e.cd<=0){
+        if(this.fire(e.x,e.y,e.angle,'enemy',8)){if(this.time>240){this.fire(e.x,e.y,e.angle+.18,'enemy',6);this.fire(e.x,e.y,e.angle-.18,'enemy',6)}e.cd=Math.max(1.15,2.1-this.time/700);e.attackSeq++}
+        else e.cd=.15
+      }
     }
     for(let i=0;i<this.allies.length;i++){
       const a=this.allies[i];a.cd-=dt;a.flash=Math.max(0,a.flash-dt)
@@ -214,6 +285,15 @@ export class GameModel {
       if(this.rallyTime<=0)for(const e of this.enemies){const d=dist(a,e);if(e.hp>0&&e!==reservedTarget&&d<nd){nd=d;enemy=e}}
       const orbit=i*2.399+this.time*.1;let tx=p.x+Math.cos(orbit)*78,ty=p.y+Math.sin(orbit)*66
       if(enemy){a.angle=Math.atan2(enemy.y-a.y,enemy.x-a.x);if(a.kind==='melee'){tx=enemy.x;ty=enemy.y}}
+      const danger=this.enemies.find(e=>e.hp>0&&e.slam?.phase==='windup'&&dist(a,e.slam)<e.slam.radius+38)?.slam
+      if(danger){
+        const away=dist(a,danger)>1?Math.atan2(a.y-danger.y,a.x-danger.x):orbit
+        for(const turn of [0,Math.PI/4,-Math.PI/4,Math.PI/2,-Math.PI/2,Math.PI]){
+          const angle=away+turn,x=danger.x+Math.cos(angle)*(danger.radius+56),y=danger.y+Math.sin(angle)*(danger.radius+56)
+          if(walkable(x,y)){tx=x;ty=y;break}
+        }
+        enemy=undefined
+      }
       const d=Math.hypot(tx-a.x,ty-a.y);if(d>12){const speed=dist(a,p)>420?350:225;this.move(a,(tx-a.x)/d*speed,(ty-a.y)/d*speed,dt)}
       const damage=(a.kind==='melee'?[0,.65,1.5,3.5]:[0,1.1,2.8,6.5])[a.tier]*this.power
       if(enemy&&a.cd<=0){

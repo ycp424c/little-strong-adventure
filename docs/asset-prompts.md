@@ -28,6 +28,12 @@ Use case: stylized-concept. Asset type: four-character game sprite sheet with AC
 - `assets/source/monster-ranged.png`：远程暗影怪，方向和列布局相同，攻击为聚能、蓄势、前伸施法、收势。
 - `node scripts/prepare-animation-assets.mjs` 同时处理怪物图集，按完整透明连通轮廓提取每帧，统一角色比例与脚底锚点，输出 `public/assets/monster-melee.webp` 和 `public/assets/monster-ranged.webp`；每帧 256×256，每张 2048×2048，共 128 帧。原图和最终 WebP 均保存在项目中。
 
-青蓝/珊瑚红阵营描边与覆盖色、地面圆环/菱形、攻击弧线和受击光圈均在 Phaser 中绘制，不烘焙到图集。全体怪物（包括僚机及精英）共享两套动作图集；精英通过体型、血条和金色标识区分，减少额外贴图与加载体积。
+青蓝/珊瑚红阵营描边与覆盖色、地面圆环/菱形、攻击弧线和受击光圈均在 Phaser 中绘制，不烘焙到图集。普通近战/远程怪物及其僚机共享两套动作图集；震地精英使用下文的独立图集，并通过体型、血条和无法捕获的标签区分。
 
 Phaser WebGL 模式直接使用 tint；Canvas 回退模式在运行时缓存半分辨率纯色透明蒙版，保持阵营覆盖色与受击闪白一致，不增加下载资源。
+
+## 震地精英动作图集
+
+使用内置 imagegen 生成，以 `public/assets/elite.png` 为造型参考，提示词完整保存在 `assets/source/elite-animation-prompt.json`。新原图为 `assets/source/monster-elite.png`，处理后的部署图集为 `public/assets/monster-elite.webp`，每帧 256×256，8 列 × 8 行，共 64 帧。方向行顺序与普通怪物一致；每行前四列为行走，后四列依次为蓄力、双拳举过头顶、落拳砸地、收招。
+
+`eliteSlamPose` 按技能模拟时间选帧并连续计算抬升、拉伸、落地压缩与衰减回弹。地面固定红圈、倒计时扇形、收缩提示圈、冲击波、裂纹和尘屑由 Phaser Graphics 动态绘制；角色图集不包含地面和粒子，因此预警能与实际范围精确对应，暂停和升级时保持同步。Canvas 模式沿用运行时透明蒙版以保持阵营颜色和受击闪白一致。

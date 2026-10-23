@@ -4,8 +4,8 @@ import sharp from 'sharp'
 import { createHash } from 'node:crypto'
 import { MONSTER_FRAME_SIZE } from '../src/game/animation.ts'
 
-test('两类怪物图集均含64个独立透明帧，边缘留白且同一动作的四帧不重复',async()=>{
-  for(const kind of ['melee','ranged']){
+test('三类怪物图集均含64个独立透明帧，边缘留白且同一动作的四帧不重复',async()=>{
+  for(const kind of ['melee','ranged','elite']){
     const {data,info}=await sharp(new URL(`../public/assets/monster-${kind}.webp`,import.meta.url).pathname).ensureAlpha().raw().toBuffer({resolveWithObject:true})
     const size=MONSTER_FRAME_SIZE
     assert.equal(info.width,size*8);assert.equal(info.height,size*8)

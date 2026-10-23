@@ -165,7 +165,7 @@ test('十分钟模拟稳定性：五段推进、精英刷新、敌群受限、�
   assert.equal(m.stage,4);assert.ok(sawElite);assert.ok(maxEnemies>10);assert.ok(m.time>=600)
   m.player.x=4820;m.player.y=900;if(m.status==='upgrade')m.chooseUpgrade(m.upgradeChoices[0].id);m.update(.05,idle);assert.equal(m.status,'won')
 })
-test('正常生命下主动接近远程怪并手动捕获，可以完成十分钟回家流程',()=>{
+test('正常生命下捕获远程怪、躲避精英红圈和弹幕，可以完成十分钟回家流程',()=>{
   let seed=1
   const m=new GameModel(()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296})
   m.start()
@@ -181,7 +181,27 @@ test('正常生命下主动接近远程怪并手动捕获，可以完成十分�
     }
     for(const enemy of m.enemies){
       const dx=m.player.x-enemy.x,dy=m.player.y-enemy.y,distance=Math.hypot(dx,dy)
-      if(distance<85){x+=dx/(distance||1)*(85-distance)/35;y+=dy/(distance||1)*(85-distance)/35}
+      const margin=enemy.elite?240:85
+      if(distance<margin){x+=dx/(distance||1)*(margin-distance)/(enemy.elite?38:35);y+=dy/(distance||1)*(margin-distance)/(enemy.elite?38:35)}
+    }
+    // 躲避固定红圈，并根据弹道的最近交点侧移；只使用玩家实际可用的走位和冲刺。
+    for(const enemy of m.enemies){
+      const slam=enemy.slam
+      if(!slam||slam.phase!=='windup')continue
+      const dx=m.player.x-slam.x,dy=m.player.y-slam.y,d=Math.hypot(dx,dy)
+      if(d<slam.radius+40){x=dx/(d||1)*5;y=dy/(d||1)*5;dash=slam.time>.65}
+    }
+    for(const bullet of m.bullets){
+      if(bullet.team!=='enemy')continue
+      const dx=m.player.x-bullet.x,dy=m.player.y-bullet.y,speedSquared=bullet.vx**2+bullet.vy**2
+      const t=(dx*bullet.vx+dy*bullet.vy)/speedSquared
+      if(t<0||t>.7)continue
+      const px=m.player.x-(bullet.x+bullet.vx*t),py=m.player.y-(bullet.y+bullet.vy*t),d=Math.hypot(px,py)
+      if(d<48){const urgency=(48-d)/16;x+=px/(d||1)*urgency;y+=py/(d||1)*urgency;if(t<.2&&d<25)dash=true}
+    }
+    if(!walkable(m.player.x+x*8,m.player.y+y*8)){
+      if(walkable(m.player.x+x*8,m.player.y))y=0
+      else if(walkable(m.player.x,m.player.y+y*8))x=0
     }
     const aim=m.weaponTarget
     // 后退中的射手可能躲开射程末端的皮搋子，靠近后再出手，为飞行时间留出余量。

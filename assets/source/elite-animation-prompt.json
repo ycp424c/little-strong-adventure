@@ -1,0 +1,29 @@
+{
+  "tool": "built-in imagegen",
+  "reference": "public/assets/elite.png",
+  "directions": [
+    "e",
+    "se",
+    "s",
+    "sw",
+    "w",
+    "nw",
+    "n",
+    "ne"
+  ],
+  "columns": {
+    "walk": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "slam": {
+      "prepare": 4,
+      "overheadHold": 5,
+      "impact": 6,
+      "recover": 7
+    }
+  },
+  "prompt": "Use case: stylized-concept. Asset type: actual production transparent sprite animation atlas for a top-down Phaser action game.\nInput image 1 is the existing elite monster identity/style reference, not a target to preserve layout. New animation sheet of this exact hulking non-human charcoal-rock shadow brute, broad shoulders, powerful forearms, tiny burning orange eyes, branching amber/orange molten cracks and short jagged shoulder horns. Painterly ink outline textured cel-shaded 2D indie art, matching the source. Huge, slow, intimidating. Strict elevated top-down three-quarter camera, no platformer side view.\nEXACT regular EIGHT columns by EIGHT rows, 64 individually isolated full-body figures, genuinely transparent alpha background. Every figure must fit completely inside its own cell INCLUDING the fully raised fists. Keep each figure SMALL: about 58% cell width, 62% cell height, roughly two thirds of sheet left empty/transparent. Every cell has generous continuous transparent gutters; never let limbs touch neighboring figures. Same body scale and feet baseline in all cells. No text or grid lines.\nRow facings in exact top-to-bottom order: EAST/right profile; SOUTHEAST/down-right; SOUTH/down/front; SOUTHWEST/down-left; WEST/left profile; NORTHWEST/up-left/back; NORTH/up/back; NORTHEAST/up-right/back. Show actual side and back rotation and coherent anatomy.\nEvery row columns 1-4: four-frame weighty WALK loop, clear alternating left/right leg steps and opposite arm swing.\nEvery row columns 5-8: a distinctive TWO-FIST GROUND SLAM sequence, NOT a claw slash: column 5 lower knees and pull both fists beside chest to gather power; column 6 raise BOTH massive fists straight overhead, ready to smash; column 7 crouch forward with BOTH fists firmly planted on the ground near the feet after a vertical downward smash; column 8 lift hands from the ground and rise back toward idle, recovery pose. Motion must be unmistakably lift, smash down, recover. Keep the whole actor and both hands visible in each facing.\nNo drawn ground, cast shadows, scenery, dust, detached particles, blast effects, projectiles, typography, labels, border, watermark, or baked checkerboard. Ground danger circles and shockwaves are separately rendered in game. Aim for 2048x2048 square. Exactly 64 separate complete figures."
+}

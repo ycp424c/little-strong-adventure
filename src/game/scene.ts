@@ -1,8 +1,8 @@
 import Phaser from 'phaser'
-import { GameModel, STAGES, WORLD, type Actor, type Control } from './model'
-import { DIRECTIONS, HERO_FRAME_SIZE, MONSTER_FRAME_SIZE, PROJECTILE_FRAME_SIZE, HeroAnimator, MonsterAnimator, TEAM_COLORS, hitReaction, projectileFrame } from './animation'
+import { ELITE_RULES, GameModel, STAGES, WORLD, type Actor, type Control } from './model'
+import { DIRECTIONS, HERO_FRAME_SIZE, MONSTER_FRAME_SIZE, PROJECTILE_FRAME_SIZE, HeroAnimator, MonsterAnimator, TEAM_COLORS, eliteSlamPose, hitReaction, projectileFrame } from './animation'
 
-type ActorVisual={body:Phaser.GameObjects.Sprite;outline:Phaser.GameObjects.Sprite;wash:Phaser.GameObjects.Sprite;animation:MonsterAnimator;attackSeq:number;x:number;y:number}
+type ActorVisual={body:Phaser.GameObjects.Sprite;outline:Phaser.GameObjects.Sprite;wash:Phaser.GameObjects.Sprite;badge?:Phaser.GameObjects.Text;animation:MonsterAnimator;attackSeq:number;x:number;y:number}
 
 export type GameBridge = { model: GameModel; onChange: () => void; onReady: () => void; onPause: () => void; muted: () => boolean; move: { x:number;y:number;dash:boolean;fire:boolean } }
 export class StreetScene extends Phaser.Scene {
@@ -13,6 +13,7 @@ export class StreetScene extends Phaser.Scene {
   private lastShotId = 0
   private projectiles = new Map<number,{sprite:Phaser.GameObjects.Sprite;trail:{x:number;y:number}[]}>()
   private fx!: Phaser.GameObjects.Graphics
+  private groundFx!: Phaser.GameObjects.Graphics
   private labels = new Map<number, Phaser.GameObjects.Text>()
   private keys!: Record<string, Phaser.Input.Keyboard.Key>
   private hudTick = 0
@@ -49,7 +50,7 @@ export class StreetScene extends Phaser.Scene {
     this.load.spritesheet('hero-walk',`${assets}hero-walk.webp`,{frameWidth:HERO_FRAME_SIZE,frameHeight:HERO_FRAME_SIZE})
     this.load.spritesheet('hero-attack',`${assets}hero-attack.webp`,{frameWidth:HERO_FRAME_SIZE,frameHeight:HERO_FRAME_SIZE})
     this.load.spritesheet('projectiles',`${assets}projectiles.webp`,{frameWidth:PROJECTILE_FRAME_SIZE,frameHeight:PROJECTILE_FRAME_SIZE})
-    for(const kind of ['melee','ranged'])this.load.spritesheet(`monster-${kind}`,`${assets}monster-${kind}.webp`,{frameWidth:MONSTER_FRAME_SIZE,frameHeight:MONSTER_FRAME_SIZE})
+    for(const kind of ['melee','ranged','elite'])this.load.spritesheet(`monster-${kind}`,`${assets}monster-${kind}.webp`,{frameWidth:MONSTER_FRAME_SIZE,frameHeight:MONSTER_FRAME_SIZE})
   }
   create() {
     const {model}=this.bridge
@@ -65,6 +66,7 @@ export class StreetScene extends Phaser.Scene {
     this.add.text(4930,740,'家  HOME',{fontFamily:'Georgia,serif',fontSize:'28px',fontStyle:'bold',color:'#ffeb9c',backgroundColor:'#294c3b',padding:{x:24,y:14}}).setOrigin(.5).setDepth(4)
     this.playerSprite=this.add.sprite(model.player.x,model.player.y,'hero-walk',this.heroAnimation.reset().frame).setDisplaySize(141,141).setDepth(20)
     this.fx=this.add.graphics().setDepth(25)
+    this.groundFx=this.add.graphics().setDepth(9)
     const circle=this.add.circle(0,0,34,0xf1cf55,.14).setStrokeStyle(2,0xf6dc6e,.8)
     const arrow=this.add.text(0,-2,'➜',{fontSize:'32px',color:'#ffdf68'}).setOrigin(.5)
     this.markerText=this.add.text(0,54,'前往街区补给',{fontSize:'14px',fontFamily:'"PingFang SC",sans-serif',color:'#fff0b5',backgroundColor:'#24392dcc',padding:{x:10,y:6}}).setOrigin(.5)
@@ -79,7 +81,7 @@ export class StreetScene extends Phaser.Scene {
       this.input.keyboard.addCapture(['UP','DOWN','LEFT','RIGHT','SPACE'])
     }
     this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>{if(pointer.leftButtonDown()&&this.bridge.model.status==='running')this.captureRequested=true})
-    this.game.canvas.setAttribute('aria-label','小强历险记游戏画面，WASD 或方向键移动，F 或鼠标左键手动捕获，自动瞄准最近敌人')
+    this.game.canvas.setAttribute('aria-label','小强历险记游戏画面，WASD 或方向键移动，F 或鼠标左键手动捕获最近的普通敌人，震地精英无法捕获，离开红圈躲避砸地')
     this.game.canvas.setAttribute('role','img')
     this.game.events.on('reset',this.reset,this)
     this.events.once('shutdown',()=>{this.game.events.off('reset',this.reset,this);this.audio?.close()})
@@ -90,37 +92,69 @@ export class StreetScene extends Phaser.Scene {
     const pose=this.heroAnimation.reset();this.lastShotId=0;this.clock=0
     this.playerSprite.setTexture(pose.texture,pose.frame).setDisplaySize(141,141).clearTint().setAlpha(1)
     for(const projectile of this.projectiles.values())projectile.sprite.destroy();this.projectiles.clear()
-    for(const visual of this.actors.values()){visual.body.destroy();visual.outline.destroy();visual.wash.destroy()}this.actors.clear()
+    for(const visual of this.actors.values())this.destroyActorVisual(visual);this.actors.clear()
+    this.groundFx.clear();this.fx.clear()
     for(const label of this.labels.values())label.destroy();this.labels.clear()
     this.playerSprite.setPosition(this.bridge.model.player.x,this.bridge.model.player.y)
     if(this.keys)Object.values(this.keys).forEach(k=>k.reset())
-    this.cameras.main.centerOn(this.bridge.model.player.x,this.bridge.model.player.y)
+    this.cameras.main.resetFX().centerOn(this.bridge.model.player.x,this.bridge.model.player.y)
   }
   private tone(event:string) {
     if(this.bridge.muted())return
     try{
       this.audio??=new AudioContext();if(this.audio.state==='suspended')void this.audio.resume()
       const osc=this.audio.createOscillator(),gain=this.audio.createGain(),now=this.audio.currentTime
-      const freq:Record<string,number>={shot:170,capture:660,merge:880,hurt:100,upgrade:1040,dash:260}
+      const freq:Record<string,number>={shot:170,capture:660,merge:880,hurt:100,upgrade:1040,dash:260,elite:90,slam:55,eliteDown:530}
       osc.type=event==='hurt'?'sawtooth':'sine';osc.frequency.setValueAtTime(freq[event]??440,now);osc.frequency.exponentialRampToValueAtTime(event==='shot'?80:(freq[event]??440)*1.5,now+.12)
       gain.gain.setValueAtTime(event==='shot'?.014:.045,now);gain.gain.exponentialRampToValueAtTime(.001,now+.15)
       osc.connect(gain);gain.connect(this.audio.destination);osc.start();osc.stop(now+.16)
     }catch{/* Gameplay remains available if audio is unsupported. */}
   }
+  private destroyActorVisual(visual:ActorVisual) {
+    visual.body.destroy();visual.outline.destroy();visual.wash.destroy();visual.badge?.destroy()
+  }
+  private drawGroundAttacks() {
+    const ground=this.groundFx
+    for(const enemy of this.bridge.model.enemies){
+      const slam=enemy.slam
+      if(!slam||slam.phase!=='windup')continue
+      const progress=Math.min(1,slam.time/ELITE_RULES.windup),pulse=.5+.5*Math.sin(this.clock*19)
+      ground.fillStyle(0xff513d,.08+pulse*.035);ground.fillCircle(slam.x,slam.y,slam.radius)
+      ground.fillStyle(0xff735b,.12+progress*.12);ground.beginPath();ground.moveTo(slam.x,slam.y);ground.arc(slam.x,slam.y,slam.radius,-Math.PI/2,-Math.PI/2+progress*Math.PI*2);ground.closePath();ground.fillPath()
+      ground.lineStyle(2.5,0xff8d65,.9)
+      for(let i=0;i<20;i++){const angle=i*Math.PI/10;ground.beginPath();ground.arc(slam.x,slam.y,slam.radius,angle,angle+.21);ground.strokePath()}
+      ground.lineStyle(1.5,0xffdba8,.45+pulse*.35);ground.strokeCircle(slam.x,slam.y,slam.radius*(1-progress*.8))
+      ground.lineStyle(2,0xffdfb5,.85);ground.lineBetween(slam.x-8,slam.y,slam.x+8,slam.y);ground.lineBetween(slam.x,slam.y-8,slam.x,slam.y+8)
+    }
+    for(const wave of this.bridge.model.shockwaves){
+      const progress=1-wave.life/wave.max,radius=wave.radius*Math.min(1,progress*1.7),fade=1-progress
+      ground.fillStyle(0xffa15c,fade*.16);ground.fillCircle(wave.x,wave.y,radius)
+      ground.lineStyle(6*fade+1,0xffce82,fade);ground.strokeCircle(wave.x,wave.y,radius)
+      ground.lineStyle(2,0xff7755,fade*.8);ground.strokeCircle(wave.x,wave.y,radius*.75)
+      for(let i=0;i<14;i++){
+        const angle=i*Math.PI/7,inner=radius*.42,outer=radius*(.65+(i%3)*.12),bend=angle+.12*(i%2?1:-1)
+        ground.lineStyle(2,0x4b302b,fade*.9);ground.beginPath();ground.moveTo(wave.x+Math.cos(angle)*inner,wave.y+Math.sin(angle)*inner);ground.lineTo(wave.x+Math.cos(bend)*outer,wave.y+Math.sin(bend)*outer);ground.lineTo(wave.x+Math.cos(angle)*(outer+12),wave.y+Math.sin(angle)*(outer+12));ground.strokePath()
+        ground.fillStyle(0xffc78e,fade*.7);ground.fillCircle(wave.x+Math.cos(angle)*(radius+6),wave.y+Math.sin(angle)*(radius+6),2+fade*3)
+      }
+    }
+  }
   private syncActor(a:Actor,ally:boolean,dt:number,running:boolean) {
     let visual=this.actors.get(a.id)
     if(!visual){
-      const texture=`monster-${a.kind}`
+      const texture=a.elite?'monster-elite':`monster-${a.kind}`
       visual={outline:this.add.sprite(a.x,a.y,texture),body:this.add.sprite(a.x,a.y,texture),wash:this.add.sprite(a.x,a.y,texture),animation:new MonsterAnimator(),attackSeq:0,x:a.x,y:a.y};this.actors.set(a.id,visual)
+      if(a.elite)visual.badge=this.add.text(a.x,a.y-146,'震地精英 · 无法捕获',{fontFamily:'"PingFang SC",sans-serif',fontSize:'11px',fontStyle:'bold',color:'#ffe0a3',stroke:'#392922',strokeThickness:4}).setOrigin(.5).setDepth(35)
     }
     const pose=visual.animation.update(dt,{running,dx:a.x-visual.x,dy:a.y-visual.y,aimAngle:a.angle,attackAngle:a.attackSeq!==visual.attackSeq?a.angle:undefined})
     visual.x=a.x;visual.y=a.y;visual.attackSeq=a.attackSeq
-    const size=a.elite?178:ally?118+a.tier*12:132,color=ally?TEAM_COLORS.ally:TEAM_COLORS.enemy,depth=10+a.y*.001
-    const hit=hitReaction(a.hit,a.hitAngle),x=a.x+hit.x,y=a.y+hit.y,texture=`monster-${a.kind}`,filled=this.fillTexture(texture,color)
-    visual.outline.setTexture(filled,pose.frame).setDisplaySize(size*1.08,size*1.08).setPosition(x,y).setDepth(depth).setTintFill(color).setAlpha(ally?.85:.64)
-    visual.body.setTexture(hit.white?this.fillTexture(texture,0xffffff):texture,pose.frame).setDisplaySize(size,size).setPosition(x,y).setDepth(depth+.01)
+    const size=a.elite?212:ally?118+a.tier*12:132,color=ally?TEAM_COLORS.ally:TEAM_COLORS.enemy,depth=10+a.y*.001,slamPose=eliteSlamPose(a.slam)
+    const frame=a.slam?DIRECTIONS.indexOf(pose.direction)*8+slamPose.frame:pose.frame,originY=a.elite?.67:.5
+    const hit=hitReaction(a.hit,a.hitAngle),x=a.x+hit.x,y=a.y+hit.y+slamPose.lift,texture=a.elite?'monster-elite':`monster-${a.kind}`,filled=this.fillTexture(texture,color),widthScale=slamPose.scaleX,heightScale=slamPose.scaleY
+    visual.outline.setTexture(filled,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale*1.08,size*heightScale*1.08).setPosition(x,y).setDepth(depth).setTintFill(color).setAlpha(ally?.85:.64)
+    visual.body.setTexture(hit.white?this.fillTexture(texture,0xffffff):texture,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale,size*heightScale).setPosition(x,y).setDepth(depth+.01)
     if(hit.white)visual.body.setTintFill(0xffffff);else visual.body.setTint(a.flash>0?0xffe9a4:ally?0xb3f3ff:0xffc3ae)
-    visual.wash.setTexture(filled,pose.frame).setDisplaySize(size,size).setPosition(x,y).setDepth(depth+.02).setTintFill(color).setAlpha(hit.white?0:ally?.4:.24)
+    visual.wash.setTexture(filled,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale,size*heightScale).setPosition(x,y).setDepth(depth+.02).setTintFill(color).setAlpha(hit.white?0:ally?.4:.24)
+    visual.badge?.setPosition(a.x,a.y-146).setText(a.slam?.phase==='windup'?`重踏蓄力 · ${Math.max(0,ELITE_RULES.windup-a.slam.time).toFixed(1)}s`:'震地精英 · 无法捕获')
     const width=size*.48
     this.fx.fillStyle(color,ally?.12:.07);this.fx.fillEllipse(a.x,a.y+24,width+12,23)
     this.fx.lineStyle(ally?2.5:1.5,color,ally?.95:.65)
@@ -130,8 +164,8 @@ export class StreetScene extends Phaser.Scene {
       this.fx.fillStyle(0x142e25,.8);this.fx.fillRoundedRect(a.x-19,a.y+32,38,4,2)
       this.fx.fillStyle(color,1);this.fx.fillRoundedRect(a.x-19,a.y+32,38*Math.max(0,a.hp/a.maxHp),4,2)
       for(let i=0;i<a.tier;i++){this.fx.fillStyle(a.tier===3?0xffda68:color);this.fx.fillCircle(a.x+(i-(a.tier-1)/2)*9,a.y-38,2.8)}
-    }else if(a.elite){this.fx.fillStyle(0x1c2725);this.fx.fillRect(a.x-28,a.y-51,56,5);this.fx.fillStyle(color);this.fx.fillRect(a.x-28,a.y-51,56*a.hp/a.maxHp,5);this.fx.lineStyle(2,0xffca70,.9);this.fx.strokeCircle(a.x,a.y-58,5)}
-    if(pose.action==='attack'){
+    }else if(a.elite){this.fx.fillStyle(0x1c2725);this.fx.fillRoundedRect(a.x-42,a.y-132,84,6,2);this.fx.fillStyle(color);this.fx.fillRoundedRect(a.x-42,a.y-132,84*Math.max(0,a.hp/a.maxHp),6,2)}
+    if(pose.action==='attack'&&!a.elite){
       const attackAngle=DIRECTIONS.indexOf(pose.direction)*Math.PI/4
       this.fx.lineStyle(ally?3:2,color,.7)
       if(a.kind==='melee'){this.fx.beginPath();this.fx.arc(a.x,a.y,36+a.tier*3,attackAngle-.65,attackAngle+.65,false);this.fx.strokePath()}
@@ -155,6 +189,7 @@ export class StreetScene extends Phaser.Scene {
     if(this.playerSprite.texture.key!==heroTexture)this.playerSprite.setTexture(heroTexture,pose.frame).setDisplaySize(141,141)
     else this.playerSprite.setFrame(pose.frame)
     this.fx.clear()
+    this.groundFx.clear();this.drawGroundAttacks()
     const target=model.weaponTarget
     if(target&&model.status==='running'){
       const angle=Math.atan2(target.enemy.y-p.y,target.enemy.x-p.x),length=Math.min(target.distance,model.weaponRange),color=target.inRange?0xe9d88e:0xd2d9c8
@@ -172,7 +207,7 @@ export class StreetScene extends Phaser.Scene {
     const active=new Set<number>()
     for(const a of model.enemies){active.add(a.id);this.syncActor(a,false,dt,advancing)}
     for(const a of model.allies){active.add(a.id);this.syncActor(a,true,dt,advancing)}
-    for(const [id,visual]of this.actors){if(!active.has(id)){visual.body.destroy();visual.outline.destroy();visual.wash.destroy();this.actors.delete(id)}}
+    for(const [id,visual]of this.actors){if(!active.has(id)){this.destroyActorVisual(visual);this.actors.delete(id)}}
     for(const impact of model.impacts){
       const progress=1-impact.life/impact.max,color=TEAM_COLORS[impact.team],radius=8+progress*29
       this.fx.lineStyle(3*(1-progress)+.5,color,1-progress);this.fx.strokeCircle(impact.x,impact.y,radius)
@@ -213,7 +248,8 @@ export class StreetScene extends Phaser.Scene {
     this.marker.setPosition(STAGES[model.stage].x,900).setAlpha(.75+Math.sin(this.clock*3)*.2)
     this.markerText.setText(model.stage===4?(model.time>=600?'家门已开启':'坚持到 10:00，回家！'):(model.visited.has(model.stage)?'继续守住街区':'街区补给 · 生命 +22'))
     if(model.status!==this.lastStatus){this.bridge.onChange();this.lastStatus=model.status}
-    if(model.sounds.length){const sounds=model.sounds.splice(0);for(const sound of new Set(sounds)){this.tone(sound);if(sound==='hurt')this.cameras.main.shake(100,.002);if(sound==='merge')this.cameras.main.flash(180,210,190,80,false,undefined,this)}}
+    if(model.sounds.length){const sounds=model.sounds.splice(0);for(const sound of new Set(sounds)){this.tone(sound);if(sound==='hurt')this.cameras.main.shake(100,.002);if(sound==='slam')this.cameras.main.shake(180,.0035);if(sound==='merge')this.cameras.main.flash(180,210,190,80,false,undefined,this)}}
+    if(model.status!=='running')this.cameras.main.resetFX()
     this.hudTick+=delta
     if(this.hudTick>100){this.hudTick=0;this.bridge.onChange()}
   }

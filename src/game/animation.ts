@@ -1,3 +1,5 @@
+import { ELITE_RULES, type Slam } from './model.ts'
+
 export const DIRECTIONS = ['e','se','s','sw','w','nw','n','ne'] as const
 export type Direction = typeof DIRECTIONS[number]
 export const HERO_FRAME_SIZE = 256
@@ -39,6 +41,15 @@ export class MonsterAnimator {
 }
 
 export const TEAM_COLORS={player:0xffdf78,ally:0x59e1ff,enemy:0xff735b} as const
+export function eliteSlamPose(slam?:Slam) {
+  if(!slam)return {frame:0,scaleX:1,scaleY:1,lift:0}
+  if(slam.phase==='windup'){
+    const progress=Math.min(1,slam.time/ELITE_RULES.windup),ease=progress*progress*(3-2*progress)
+    return {frame:progress<.3?4:5,scaleX:1-ease*.045,scaleY:1+ease*.075,lift:-ease*5}
+  }
+  const settle=Math.max(0,1-slam.time/ELITE_RULES.recovery),bounce=settle*Math.exp(-slam.time*7)*Math.cos(slam.time*14)
+  return {frame:slam.time<.16?6:7,scaleX:1+bounce*.14,scaleY:1-bounce*.12,lift:0}
+}
 // Visual displacement only: hit reactions never move collision bodies or change combat balance.
 export function hitReaction(remaining:number,angle:number) {
   const progress=Math.max(0,Math.min(1,remaining/.22)),age=.22-remaining
