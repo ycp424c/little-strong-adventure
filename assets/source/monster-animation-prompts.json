@@ -1,0 +1,36 @@
+{
+  "tool": "built-in imagegen",
+  "meleeRevision": {"prompt":"Use case: stylized-concept. Asset type: production animation sprite sheet for a top-down 2D Phaser street action game.\nInput image 1 is the existing melee shadow monster identity/style reference, NOT an edit target. Create an all-new sprite animation sheet, same fictional nonhuman charcoal tar creature, massive shoulders, orange-coral glowing cracks and small orange eyes, large clawed arms, squat legs. Painterly 2D indie ink outline and textured cel shading. Clearly nonhuman.\nPrecisely EIGHT columns and EIGHT rows, 64 individually separated full-body figures on genuinely transparent alpha background. Keep a generous empty gutter around every figure; no poses touch another cell. Each character same body scale and feet baseline within each cell, fixed steep overhead three-quarter camera appropriate to the reference (no side-view platformer).\nEach ROW is one facing direction in this exact order from top to bottom: EAST (right), SOUTHEAST (down-right), SOUTH (down/front), SOUTHWEST (down-left), WEST (left), NORTHWEST (up-left/back), NORTH (up/back), NORTHEAST (up-right/back). Rotation must show different sides and back of head/body, NOT identical front figures shifted around.\nIn every row columns 1-4 form a four-frame walking loop: left foot forward/arms counter-swing, passing pose, right foot forward/arms counter-swing, opposite passing pose.\nColumns 5-8 form a four-frame melee claw strike: rear arm windup, forward claw thrust, follow-through with other claw, recovery. Movements obvious at small size, coherent anatomy.\nLarge readable whole body silhouette, claws connected to arms. Avoid detached dust or effects, floor, shadows, scenery, UI, text, labels, borders and watermarks. Every cell contains exactly one complete monster. No cropping. Aim for 2048x2048 square transparent sheet.\nCRITICAL SPACING REVISION: The reference sheet has arms of neighboring attack poses touching. Rebuild a clean 8x8 atlas with MUCH SMALLER characters. Each figure must occupy no more than 58% of its cell width AND 62% of its cell height INCLUDING every outstretched claw. The image must be mostly transparent empty space, roughly 65% empty. Center every figure within its own cell. There must be a visible, continuous transparent gutter of at least 20 pixels between EVERY character, including attack gestures. Keep claws compact and bent so full limbs fit without ever touching other poses. Do not create one connected mass across two cells. Exactly 64 complete isolated figures. Preserve the silhouette, dark charcoal skin, coral cracks, eight facing rows and walk/attack sequence.","reference":"first generated melee atlas; regenerated with larger transparent gutters"},
+  "references": {
+    "melee": "public/assets/melee.png",
+    "ranged": "public/assets/ranged.png"
+  },
+  "directions": [
+    "e",
+    "se",
+    "s",
+    "sw",
+    "w",
+    "nw",
+    "n",
+    "ne"
+  ],
+  "columns": {
+    "walk": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "attack": [
+      4,
+      5,
+      6,
+      7
+    ]
+  },
+  "prompts": {
+    "melee": "Use case: stylized-concept. Asset type: production animation sprite sheet for a top-down 2D Phaser street action game.\nInput image 1 is the existing melee shadow monster identity/style reference, NOT an edit target. Create an all-new sprite animation sheet, same fictional nonhuman charcoal tar creature, massive shoulders, orange-coral glowing cracks and small orange eyes, large clawed arms, squat legs. Painterly 2D indie ink outline and textured cel shading. Clearly nonhuman.\nPrecisely EIGHT columns and EIGHT rows, 64 individually separated full-body figures on genuinely transparent alpha background. Keep a generous empty gutter around every figure; no poses touch another cell. Each character same body scale and feet baseline within each cell, fixed steep overhead three-quarter camera appropriate to the reference (no side-view platformer).\nEach ROW is one facing direction in this exact order from top to bottom: EAST (right), SOUTHEAST (down-right), SOUTH (down/front), SOUTHWEST (down-left), WEST (left), NORTHWEST (up-left/back), NORTH (up/back), NORTHEAST (up-right/back). Rotation must show different sides and back of head/body, NOT identical front figures shifted around.\nIn every row columns 1-4 form a four-frame walking loop: left foot forward/arms counter-swing, passing pose, right foot forward/arms counter-swing, opposite passing pose.\nColumns 5-8 form a four-frame melee claw strike: rear arm windup, forward claw thrust, follow-through with other claw, recovery. Movements obvious at small size, coherent anatomy.\nLarge readable whole body silhouette, claws connected to arms. Avoid detached dust or effects, floor, shadows, scenery, UI, text, labels, borders and watermarks. Every cell contains exactly one complete monster. No cropping. Aim for 2048x2048 square transparent sheet.",
+    "ranged": "Use case: stylized-concept. Asset type: production animation sprite sheet for a top-down 2D Phaser street action game.\nInput image 1 is the existing ranged shadow monster identity/style reference, NOT an edit target. Create an all-new sprite animation sheet, same fictional nonhuman slender charcoal tar creature, long sharp hood-like head, thin legs, pointed shoulder tendrils, glowing energy orb held in one claw. Give eyes and connected orb a pale amber glow so runtime team tint stays readable. Painterly 2D indie ink outline and textured cel shading matching the reference. Clearly nonhuman.\nPrecisely EIGHT columns and EIGHT rows, 64 individually separated full-body figures on genuinely transparent alpha background. Keep a generous empty gutter around every figure; no poses touch another cell. Each character same body scale and feet baseline within each cell, fixed steep overhead three-quarter camera appropriate to the reference (no side-view platformer).\nEach ROW is one facing direction in this exact order from top to bottom: EAST (right), SOUTHEAST (down-right), SOUTH (down/front), SOUTHWEST (down-left), WEST (left), NORTHWEST (up-left/back), NORTH (up/back), NORTHEAST (up-right/back). Different head/body sides and backs must be visible, NOT identical front figures shifted around.\nIn every row columns 1-4 form a four-frame stalking walk loop: left leg forward, passing pose, right leg forward, opposite passing pose; tendrils sway.\nColumns 5-8 form a four-frame ranged casting gesture: draw orb close to chest, charge orb with both hands, extend leading arm toward facing direction to launch energy, recoil/recovery. Keep orb attached to hand and all parts connected to the body, NO detached projectile or particle. Casting visibly different from walking at small size.\nLarge readable whole body silhouette, coherent anatomy. Avoid detached dust or effects, floor, shadows, scenery, UI, text, labels, borders and watermarks. Every cell contains exactly one complete monster. No cropping. Aim for 2048x2048 square transparent sheet."
+  }
+}

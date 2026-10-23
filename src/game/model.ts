@@ -1,6 +1,7 @@
 export type Kind = 'melee' | 'ranged'
 export type Status = 'ready' | 'running' | 'paused' | 'upgrade' | 'won' | 'lost'
-export type Actor = { id: number; x: number; y: number; hp: number; maxHp: number; kind: Kind; tier: number; cd: number; elite?: boolean; angle: number; flash: number }
+export type Actor = { id: number; x: number; y: number; hp: number; maxHp: number; kind: Kind; tier: number; cd: number; elite?: boolean; angle: number; flash: number; hit:number; hitAngle:number; attackSeq:number }
+export type Impact = { id:number; x:number; y:number; angle:number; team:'player'|'ally'|'enemy'; life:number; max:number }
 export type Bullet = { id: number; x: number; y: number; vx: number; vy: number; life: number; team: 'rope' | 'enemy' | 'ally'; damage: number; returning?: boolean; distance: number }
 export type Effect = { x: number; y: number; text: string; color: string; life: number; max: number }
 export type Control = { x: number; y: number; fire: boolean; dash: boolean; rally: boolean }
@@ -38,11 +39,12 @@ function streetSpawn(x: number, y: number) {
 export class GameModel {
   status: Status = 'ready'
   time = 0
-  player = { x: 820, y: 945, hp: 100, maxHp: 100, angle: 0, invincible: 0, dash: 0, dashCd: 0, rallyCd: 0 }
+  player = { x: 820, y: 945, hp: 100, maxHp: 100, angle: 0, invincible: 0, dash: 0, dashCd: 0, rallyCd: 0, hit:0, hitAngle:0 }
   enemies: Actor[] = []
   allies: Actor[] = []
   bullets: Bullet[] = []
   effects: Effect[] = []
+  impacts: Impact[] = []
   pickups: {id:number;x:number;y:number;life:number}[] = []
   captured = 0
   merges = 0
@@ -96,14 +98,14 @@ export class GameModel {
     if(!spawn)return
     elite=elite||(this.time>180&&this.random()<.02+this.time/12000)
     const hp=elite?3+Math.floor(this.time/120):1
-    this.enemies.push({ id:++this.uid,...spawn,kind:kind??(this.random()<.28+this.time/1900?'ranged':'melee'),hp,maxHp:hp,tier:1,cd:1+this.random(),elite,angle:0,flash:0 })
+    this.enemies.push({ id:++this.uid,...spawn,kind:kind??(this.random()<.28+this.time/1900?'ranged':'melee'),hp,maxHp:hp,tier:1,cd:1+this.random(),elite,angle:0,flash:0,hit:0,hitAngle:0,attackSeq:0 })
   }
   recruit(kind: Kind, x=this.player.x, y=this.player.y) {
     this.captured++;this.xp++;this.kills++
     const pair = this.allies.filter(a=>a.kind===kind&&a.tier===1)
     if(this.allies.length>=this.capacity&&pair.length<2){this.text(x,y,'编队已满 · 回复全队','#a5d6c0');this.allies.forEach(a=>a.hp=Math.min(a.maxHp,a.hp+12));this.player.hp=Math.min(this.player.maxHp,this.player.hp+2);return}
     const hp=allyHP(kind,1)*this.allyArmor
-    this.allies.push({id:++this.uid,x,y,kind,tier:1,hp,maxHp:hp,cd:.2,angle:0,flash:0})
+    this.allies.push({id:++this.uid,x,y,kind,tier:1,hp,maxHp:hp,cd:.2,angle:0,flash:0,hit:0,hitAngle:0,attackSeq:0})
     this.text(x,y,kind==='melee'?'近战护卫 +1':'远程射手 +1','#b4ead0');this.sounds.push('capture')
     this.mergeAllies()
   }
@@ -113,7 +115,7 @@ export class GameModel {
       while(group.length>=3){
         const consumed=group.slice(0,3), ids=new Set(consumed.map(a=>a.id)), center=consumed[0]
         this.allies=this.allies.filter(a=>!ids.has(a.id));const hp=allyHP(kind,tier+1)*this.allyArmor
-        this.allies.push({id:++this.uid,x:center.x,y:center.y,kind,tier:tier+1,hp,maxHp:hp,cd:.1,angle:0,flash:.6})
+        this.allies.push({id:++this.uid,x:center.x,y:center.y,kind,tier:tier+1,hp,maxHp:hp,cd:.1,angle:0,flash:.6,hit:0,hitAngle:0,attackSeq:0})
         this.merges++;this.text(center.x,center.y,`合成！${tier+1} 级${kind==='melee'?'护卫':'射手'}`,'#ffe07b',2.5);this.sounds.push('merge')
         group=this.allies.filter(a=>a.kind===kind&&a.tier===tier)
       }
@@ -135,15 +137,24 @@ export class GameModel {
     if(walkable(actor.x+vx*dt,actor.y,radius))actor.x+=vx*dt
     if(walkable(actor.x,actor.y+vy*dt,radius))actor.y+=vy*dt
   }
-  private hurtPlayer(damage:number) {
+  private impact(target:{x:number;y:number;hit:number;hitAngle:number},source:{x:number;y:number},team:Impact['team']) {
+    target.hit=.22;target.hitAngle=Math.atan2(target.y-source.y,target.x-source.x)
+    this.impacts.push({id:++this.uid,x:target.x,y:target.y,angle:target.hitAngle,team,life:.28,max:.28})
+  }
+  private hurtAlly(ally:Actor,damage:number,source:{x:number;y:number}) {
+    if(ally.hp<=0)return
+    ally.hp-=damage/this.allyArmor;this.impact(ally,source,'ally')
+    this.text(ally.x,ally.y-24,`−${Math.ceil(damage/this.allyArmor)}`,'#8deaff',.65)
+  }
+  private hurtPlayer(damage:number,source:{x:number;y:number}) {
     if(this.player.invincible>0)return
-    this.player.hp=Math.max(0,this.player.hp-damage*this.armor);this.player.invincible=.65
+    this.player.hp=Math.max(0,this.player.hp-damage*this.armor);this.player.invincible=.65;this.impact(this.player,source,'player')
     this.text(this.player.x,this.player.y-30,`−${Math.ceil(damage*this.armor)}`,'#ff816d');this.sounds.push('hurt')
     if(this.player.hp<=0)this.status='lost'
   }
-  private hitEnemy(enemy:Actor,damage:number,capture:boolean) {
+  private hitEnemy(enemy:Actor,damage:number,capture:boolean,source:{x:number;y:number}) {
     if(enemy.hp<=0)return
-    enemy.hp-=damage;enemy.flash=.12
+    enemy.hp-=damage;this.impact(enemy,source,'enemy')
     if(enemy.hp>0){this.text(enemy.x,enemy.y,enemy.elite?'护甲破裂':'命中','#f4a56c');return}
     if(capture){this.recruit(enemy.kind,enemy.x,enemy.y);if(enemy.elite){this.player.hp=Math.min(this.player.maxHp,this.player.hp+18);this.text(enemy.x,enemy.y-45,'精英捕获 · 生命 +18')}}
     else {this.kills++;this.xp+=.45;this.text(enemy.x,enemy.y,'+能量','#b5dbba',.65);if(this.random()<.08)this.pickups.push({id:++this.uid,x:enemy.x,y:enemy.y,life:22})}
@@ -158,6 +169,10 @@ export class GameModel {
     if(this.status!=='running')return
     dt=Math.min(dt,.05);this.time+=dt
     const p=this.player
+    p.hit=Math.max(0,p.hit-dt)
+    for(const impact of this.impacts)impact.life-=dt
+    this.impacts=this.impacts.filter(impact=>impact.life>0)
+    for(const actor of [...this.enemies,...this.allies])actor.hit=Math.max(0,actor.hit-dt)
     p.invincible=Math.max(0,p.invincible-dt);p.dashCd=Math.max(0,p.dashCd-dt);p.rallyCd=Math.max(0,p.rallyCd-dt);p.dash=Math.max(0,p.dash-dt);this.rallyTime=Math.max(0,this.rallyTime-dt)
     const len=Math.hypot(input.x,input.y)||1
     if(input.dash&&p.dashCd===0&&(input.x||input.y)){p.dash=.19;p.dashCd=this.dashMax;p.invincible=.3;this.sounds.push('dash')}
@@ -190,8 +205,8 @@ export class GameModel {
       const speed=(e.kind==='melee'?94:95)*(1+this.time/1200)*(e.elite?1.22:1)
       if(e.kind==='melee'||nd>420||this.rallyTime>0)this.move(e,Math.cos(e.angle)*speed,Math.sin(e.angle)*speed,dt)
       else if(nd<365)this.move(e,-Math.cos(e.angle)*Math.min(175,speed*1.4),-Math.sin(e.angle)*Math.min(175,speed*1.4),dt)
-      if(e.kind==='melee'&&nd<(e.elite?47:33)&&e.cd<=0){const damage=(e.elite?23:10)*(1+this.time/1200);if(target===p)this.hurtPlayer(damage);else{target.hp-=damage/this.allyArmor;this.text(target.x,target.y,'−','#f09a82',.4)}e.cd=.95}
-      if(e.kind==='ranged'&&nd<540&&e.cd<=0){this.fire(e.x,e.y,e.angle,'enemy',8);if(this.time>360){this.fire(e.x,e.y,e.angle+.18,'enemy',6);this.fire(e.x,e.y,e.angle-.18,'enemy',6)}e.cd=Math.max(1.25,2.5-this.time/800)}
+      if(e.kind==='melee'&&nd<(e.elite?47:33)&&e.cd<=0){const damage=(e.elite?23:10)*(1+this.time/1200);if(target===p)this.hurtPlayer(damage,e);else this.hurtAlly(target as Actor,damage,e);e.cd=.95;e.attackSeq++}
+      if(e.kind==='ranged'&&nd<540&&e.cd<=0){this.fire(e.x,e.y,e.angle,'enemy',8);if(this.time>360){this.fire(e.x,e.y,e.angle+.18,'enemy',6);this.fire(e.x,e.y,e.angle-.18,'enemy',6)}e.cd=Math.max(1.25,2.5-this.time/800);e.attackSeq++}
     }
     for(let i=0;i<this.allies.length;i++){
       const a=this.allies[i];a.cd-=dt;a.flash=Math.max(0,a.flash-dt)
@@ -202,8 +217,8 @@ export class GameModel {
       const d=Math.hypot(tx-a.x,ty-a.y);if(d>12){const speed=dist(a,p)>420?350:225;this.move(a,(tx-a.x)/d*speed,(ty-a.y)/d*speed,dt)}
       const damage=(a.kind==='melee'?[0,.65,1.5,3.5]:[0,1.1,2.8,6.5])[a.tier]*this.power
       if(enemy&&a.cd<=0){
-        if(a.kind==='melee'&&nd<46+a.tier*12){const radius=[0,58,75,100][a.tier];if(a.tier===1)this.hitEnemy(enemy,damage,false);else this.enemies.forEach(e=>{if(e.hp>0&&e!==reservedTarget&&dist(a,e)<radius)this.hitEnemy(e,damage,false)});this.text(a.x,a.y,'✦',a.tier===3?'#ffe18b':'#d5e5bc',.25);a.cd=1.1/Math.sqrt(this.power)}
-        else if(a.kind==='ranged'){this.fire(a.x,a.y,a.angle,'ally',damage);if(a.tier===3){this.fire(a.x,a.y,a.angle-.16,'ally',damage*.7);this.fire(a.x,a.y,a.angle+.16,'ally',damage*.7)}a.cd=1.2/Math.sqrt(this.power)}
+        if(a.kind==='melee'&&nd<46+a.tier*12){const radius=[0,58,75,100][a.tier];if(a.tier===1)this.hitEnemy(enemy,damage,false,a);else this.enemies.forEach(e=>{if(e.hp>0&&e!==reservedTarget&&dist(a,e)<radius)this.hitEnemy(e,damage,false,a)});this.text(a.x,a.y,'✦',a.tier===3?'#ffe18b':'#d5e5bc',.25);a.cd=1.1/Math.sqrt(this.power);a.attackSeq++}
+        else if(a.kind==='ranged'){this.fire(a.x,a.y,a.angle,'ally',damage);if(a.tier===3){this.fire(a.x,a.y,a.angle-.16,'ally',damage*.7);this.fire(a.x,a.y,a.angle+.16,'ally',damage*.7)}a.cd=1.2/Math.sqrt(this.power);a.attackSeq++}
       }
     }
     for(const b of this.bullets){
@@ -215,10 +230,10 @@ export class GameModel {
       const reachedRange=outbound&&b.distance>=this.range
       if(!walkable(b.x,b.y,3)){if(b.team==='rope')b.returning=true;else b.life=0}
       if(b.team==='enemy'){
-        if(dist(b,p)<22){this.hurtPlayer(b.damage);b.life=0}
-        else for(const a of this.allies)if(dist(b,a)<22){a.hp-=b.damage/this.allyArmor;b.life=0;break}
+        if(dist(b,p)<22){this.hurtPlayer(b.damage,{x:b.x-b.vx,y:b.y-b.vy});b.life=0}
+        else for(const a of this.allies)if(dist(b,a)<22&&a.hp>0){this.hurtAlly(a,b.damage,{x:b.x-b.vx,y:b.y-b.vy});b.life=0;break}
       }else if(!b.returning){
-        for(const e of this.enemies){if(e.hp<=0||(b.team==='ally'&&e===reservedTarget))continue;const vx=b.x-oldX,vy=b.y-oldY,den=vx*vx+vy*vy;const t=den?clamp(((e.x-oldX)*vx+(e.y-oldY)*vy)/den,0,1):0;const distance=Math.hypot(e.x-(oldX+t*vx),e.y-(oldY+t*vy));if(distance<(e.elite?36:24)){this.hitEnemy(e,b.damage,b.team==='rope');if(b.team==='rope')b.returning=true;else b.life=0;break}}
+        for(const e of this.enemies){if(e.hp<=0||(b.team==='ally'&&e===reservedTarget))continue;const vx=b.x-oldX,vy=b.y-oldY,den=vx*vx+vy*vy;const t=den?clamp(((e.x-oldX)*vx+(e.y-oldY)*vy)/den,0,1):0;const distance=Math.hypot(e.x-(oldX+t*vx),e.y-(oldY+t*vy));if(distance<(e.elite?36:24)){this.hitEnemy(e,b.damage,b.team==='rope',{x:oldX-b.vx*.01,y:oldY-b.vy*.01});if(b.team==='rope')b.returning=true;else b.life=0;break}}
       }
       if(reachedRange)b.returning=true
     }

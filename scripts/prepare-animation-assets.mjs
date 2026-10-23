@@ -46,6 +46,8 @@ for(const spec of [
   {name:'hero-walk',cols:6,rows:8,size:256,hero:true,grid:true},
   {name:'hero-attack',cols:4,rows:8,size:256,hero:true,grid:false},
   {name:'projectiles',cols:6,rows:3,size:96,hero:false,grid:false},
+  {name:'monster-melee',cols:8,rows:8,size:256,hero:true,grid:false},
+  {name:'monster-ranged',cols:8,rows:8,size:256,hero:true,grid:false},
 ]){
   const source=path(`assets/source/${spec.name}.png`)
   const {data,info}=await sharp(source).ensureAlpha().raw().toBuffer({resolveWithObject:true})

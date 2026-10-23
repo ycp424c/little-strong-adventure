@@ -1,11 +1,13 @@
 import Phaser from 'phaser'
 import { GameModel, STAGES, WORLD, type Actor, type Control } from './model'
-import { HERO_FRAME_SIZE, PROJECTILE_FRAME_SIZE, HeroAnimator, projectileFrame } from './animation'
+import { DIRECTIONS, HERO_FRAME_SIZE, MONSTER_FRAME_SIZE, PROJECTILE_FRAME_SIZE, HeroAnimator, MonsterAnimator, TEAM_COLORS, hitReaction, projectileFrame } from './animation'
+
+type ActorVisual={body:Phaser.GameObjects.Sprite;outline:Phaser.GameObjects.Sprite;wash:Phaser.GameObjects.Sprite;animation:MonsterAnimator;attackSeq:number;x:number;y:number}
 
 export type GameBridge = { model: GameModel; onChange: () => void; onReady: () => void; onPause: () => void; muted: () => boolean; move: { x:number;y:number;dash:boolean;fire:boolean } }
 export class StreetScene extends Phaser.Scene {
   bridge: GameBridge
-  private actors = new Map<number, Phaser.GameObjects.Image>()
+  private actors = new Map<number, ActorVisual>()
   private playerSprite!: Phaser.GameObjects.Sprite
   private heroAnimation = new HeroAnimator()
   private lastShotId = 0
@@ -21,15 +23,33 @@ export class StreetScene extends Phaser.Scene {
   private lastStatus = 'ready'
   private captureRequested = false
   constructor(bridge:GameBridge){super('street');this.bridge=bridge}
+  private fillTexture(key:string,color:number) {
+    if(this.game.renderer.type!==Phaser.CANVAS)return key
+    const filled=`${key}-fill-${color.toString(16)}`
+    if(this.textures.exists(filled))return filled
+    // Canvas rendering ignores Phaser tint. Cache half-resolution alpha silhouettes once;
+    // these overlays keep team colors and hit flashes visible without extra downloaded art.
+    const original=this.textures.get(key),source=original.getSourceImage() as HTMLImageElement
+    const texture=this.textures.createCanvas(filled,source.width/2,source.height/2)
+    if(!texture)throw new Error(`Cannot create palette texture: ${filled}`)
+    const context=texture.context
+    context.drawImage(source,0,0,source.width/2,source.height/2)
+    context.globalCompositeOperation='source-in';context.fillStyle=`#${color.toString(16).padStart(6,'0')}`
+    context.fillRect(0,0,source.width/2,source.height/2);context.globalCompositeOperation='source-over'
+    for(const name of original.getFrameNames()){
+      const frame=original.get(name)
+      texture.add(name,0,frame.cutX/2,frame.cutY/2,frame.cutWidth/2,frame.cutHeight/2)
+    }
+    texture.refresh()
+    return filled
+  }
   preload() {
     const assets=`${import.meta.env.BASE_URL}assets/`
     this.load.image('city',`${assets}city.webp`)
     this.load.spritesheet('hero-walk',`${assets}hero-walk.webp`,{frameWidth:HERO_FRAME_SIZE,frameHeight:HERO_FRAME_SIZE})
     this.load.spritesheet('hero-attack',`${assets}hero-attack.webp`,{frameWidth:HERO_FRAME_SIZE,frameHeight:HERO_FRAME_SIZE})
     this.load.spritesheet('projectiles',`${assets}projectiles.webp`,{frameWidth:PROJECTILE_FRAME_SIZE,frameHeight:PROJECTILE_FRAME_SIZE})
-    this.load.image('melee',`${assets}melee.png`)
-    this.load.image('ranged',`${assets}ranged.png`)
-    this.load.image('elite',`${assets}elite.png`)
+    for(const kind of ['melee','ranged'])this.load.spritesheet(`monster-${kind}`,`${assets}monster-${kind}.webp`,{frameWidth:MONSTER_FRAME_SIZE,frameHeight:MONSTER_FRAME_SIZE})
   }
   create() {
     const {model}=this.bridge
@@ -68,9 +88,9 @@ export class StreetScene extends Phaser.Scene {
   private reset() {
     this.captureRequested=false
     const pose=this.heroAnimation.reset();this.lastShotId=0;this.clock=0
-    this.playerSprite.setTexture(pose.texture,pose.frame)
+    this.playerSprite.setTexture(pose.texture,pose.frame).setDisplaySize(141,141).clearTint().setAlpha(1)
     for(const projectile of this.projectiles.values())projectile.sprite.destroy();this.projectiles.clear()
-    for(const image of this.actors.values())image.destroy();this.actors.clear()
+    for(const visual of this.actors.values()){visual.body.destroy();visual.outline.destroy();visual.wash.destroy()}this.actors.clear()
     for(const label of this.labels.values())label.destroy();this.labels.clear()
     this.playerSprite.setPosition(this.bridge.model.player.x,this.bridge.model.player.y)
     if(this.keys)Object.values(this.keys).forEach(k=>k.reset())
@@ -87,20 +107,36 @@ export class StreetScene extends Phaser.Scene {
       osc.connect(gain);gain.connect(this.audio.destination);osc.start();osc.stop(now+.16)
     }catch{/* Gameplay remains available if audio is unsupported. */}
   }
-  private syncActor(a:Actor,ally:boolean) {
-    let image=this.actors.get(a.id)
-    if(!image){image=this.add.image(a.x,a.y,a.elite?'elite':a.kind);this.actors.set(a.id,image)}
-    const size=(a.elite?82:ally?50+a.tier*8:58)
-    image.setDisplaySize(size,size*1.08).setPosition(a.x,a.y+Math.sin(this.clock*7+a.id)*1.5).setDepth(10+a.y*.001).setFlipX(Math.cos(a.angle)<0)
-    image.setTint(a.flash>0?0xffe9a4:ally?0xc0f4e4:0xffffff)
-    this.fx.fillStyle(0x132d25,.26);this.fx.fillEllipse(a.x,a.y+22,size*.8,15)
+  private syncActor(a:Actor,ally:boolean,dt:number,running:boolean) {
+    let visual=this.actors.get(a.id)
+    if(!visual){
+      const texture=`monster-${a.kind}`
+      visual={outline:this.add.sprite(a.x,a.y,texture),body:this.add.sprite(a.x,a.y,texture),wash:this.add.sprite(a.x,a.y,texture),animation:new MonsterAnimator(),attackSeq:0,x:a.x,y:a.y};this.actors.set(a.id,visual)
+    }
+    const pose=visual.animation.update(dt,{running,dx:a.x-visual.x,dy:a.y-visual.y,aimAngle:a.angle,attackAngle:a.attackSeq!==visual.attackSeq?a.angle:undefined})
+    visual.x=a.x;visual.y=a.y;visual.attackSeq=a.attackSeq
+    const size=a.elite?178:ally?118+a.tier*12:132,color=ally?TEAM_COLORS.ally:TEAM_COLORS.enemy,depth=10+a.y*.001
+    const hit=hitReaction(a.hit,a.hitAngle),x=a.x+hit.x,y=a.y+hit.y,texture=`monster-${a.kind}`,filled=this.fillTexture(texture,color)
+    visual.outline.setTexture(filled,pose.frame).setDisplaySize(size*1.08,size*1.08).setPosition(x,y).setDepth(depth).setTintFill(color).setAlpha(ally?.85:.64)
+    visual.body.setTexture(hit.white?this.fillTexture(texture,0xffffff):texture,pose.frame).setDisplaySize(size,size).setPosition(x,y).setDepth(depth+.01)
+    if(hit.white)visual.body.setTintFill(0xffffff);else visual.body.setTint(a.flash>0?0xffe9a4:ally?0xb3f3ff:0xffc3ae)
+    visual.wash.setTexture(filled,pose.frame).setDisplaySize(size,size).setPosition(x,y).setDepth(depth+.02).setTintFill(color).setAlpha(hit.white?0:ally?.4:.24)
+    const width=size*.48
+    this.fx.fillStyle(color,ally?.12:.07);this.fx.fillEllipse(a.x,a.y+24,width+12,23)
+    this.fx.lineStyle(ally?2.5:1.5,color,ally?.95:.65)
+    if(ally){this.fx.strokeEllipse(a.x,a.y+24,width+10,23);this.fx.fillStyle(color);this.fx.fillTriangle(a.x-5,a.y+43,a.x+5,a.y+43,a.x,a.y+37)}
+    else {this.fx.beginPath();this.fx.moveTo(a.x-width*.6,a.y+24);this.fx.lineTo(a.x,a.y+11);this.fx.lineTo(a.x+width*.6,a.y+24);this.fx.lineTo(a.x,a.y+37);this.fx.closePath();this.fx.strokePath()}
     if(ally){
-      const colors=[0,0x8fd7b9,0x76d7ed,0xffda68]
-      this.fx.lineStyle(a.tier===3?3:1.5,colors[a.tier],.9);this.fx.strokeEllipse(a.x,a.y+19,size*.9,25)
       this.fx.fillStyle(0x142e25,.8);this.fx.fillRoundedRect(a.x-19,a.y+32,38,4,2)
-      this.fx.fillStyle(colors[a.tier],1);this.fx.fillRoundedRect(a.x-19,a.y+32,38*Math.max(0,a.hp/a.maxHp),4,2)
-      for(let i=0;i<a.tier;i++){this.fx.fillStyle(colors[a.tier]);this.fx.fillCircle(a.x+(i-(a.tier-1)/2)*9,a.y-38,2.8)}
-    }else if(a.elite){this.fx.fillStyle(0x1c2725);this.fx.fillRect(a.x-28,a.y-51,56,5);this.fx.fillStyle(0xf48965);this.fx.fillRect(a.x-28,a.y-51,56*a.hp/a.maxHp,5)}
+      this.fx.fillStyle(color,1);this.fx.fillRoundedRect(a.x-19,a.y+32,38*Math.max(0,a.hp/a.maxHp),4,2)
+      for(let i=0;i<a.tier;i++){this.fx.fillStyle(a.tier===3?0xffda68:color);this.fx.fillCircle(a.x+(i-(a.tier-1)/2)*9,a.y-38,2.8)}
+    }else if(a.elite){this.fx.fillStyle(0x1c2725);this.fx.fillRect(a.x-28,a.y-51,56,5);this.fx.fillStyle(color);this.fx.fillRect(a.x-28,a.y-51,56*a.hp/a.maxHp,5);this.fx.lineStyle(2,0xffca70,.9);this.fx.strokeCircle(a.x,a.y-58,5)}
+    if(pose.action==='attack'){
+      const attackAngle=DIRECTIONS.indexOf(pose.direction)*Math.PI/4
+      this.fx.lineStyle(ally?3:2,color,.7)
+      if(a.kind==='melee'){this.fx.beginPath();this.fx.arc(a.x,a.y,36+a.tier*3,attackAngle-.65,attackAngle+.65,false);this.fx.strokePath()}
+      else {this.fx.strokeCircle(a.x+Math.cos(attackAngle)*24,a.y+Math.sin(attackAngle)*24,10+Math.sin(this.clock*28)*2)}
+    }
   }
   update(_time:number,delta:number) {
     if(!this.playerSprite)return
@@ -115,7 +151,8 @@ export class StreetScene extends Phaser.Scene {
     const shot=model.bullets.find(b=>b.team==='rope'&&b.id>this.lastShotId)
     if(shot)this.lastShotId=shot.id
     const pose=this.heroAnimation.update(dt,{running:advancing,dx:p.x-oldX,dy:p.y-oldY,aimAngle:model.weaponTarget?p.angle:undefined,shotAngle:shot?Math.atan2(shot.vy,shot.vx):undefined,dashing:p.dash>0})
-    if(this.playerSprite.texture.key!==pose.texture)this.playerSprite.setTexture(pose.texture,pose.frame)
+    const playerHit=hitReaction(p.hit,p.hitAngle),heroTexture=playerHit.white?this.fillTexture(pose.texture,0xffffff):pose.texture
+    if(this.playerSprite.texture.key!==heroTexture)this.playerSprite.setTexture(heroTexture,pose.frame).setDisplaySize(141,141)
     else this.playerSprite.setFrame(pose.frame)
     this.fx.clear()
     const target=model.weaponTarget
@@ -128,20 +165,27 @@ export class StreetScene extends Phaser.Scene {
     }
     this.fx.fillStyle(0x132d25,.35);this.fx.fillEllipse(p.x,p.y+26,48,18)
     this.fx.lineStyle(2,0xf0d573,.9);this.fx.strokeEllipse(p.x,p.y+22,63,30)
-    this.playerSprite.setPosition(p.x,p.y).setDepth(20+p.y*.001)
+    this.playerSprite.setPosition(p.x+playerHit.x,p.y+playerHit.y).setDepth(20+p.y*.001)
+    if(playerHit.white)this.playerSprite.setTintFill(0xffffff);else this.playerSprite.clearTint()
     this.playerSprite.setAlpha(p.invincible>0&&Math.floor(this.clock*20)%2===0?.45:1)
     if(p.dash>0){this.fx.lineStyle(4,0xf8d76b,.7);this.fx.strokeCircle(p.x,p.y,43)}
     const active=new Set<number>()
-    for(const a of model.enemies){active.add(a.id);this.syncActor(a,false)}
-    for(const a of model.allies){active.add(a.id);this.syncActor(a,true)}
-    for(const [id,image]of this.actors){if(!active.has(id)){image.destroy();this.actors.delete(id)}}
+    for(const a of model.enemies){active.add(a.id);this.syncActor(a,false,dt,advancing)}
+    for(const a of model.allies){active.add(a.id);this.syncActor(a,true,dt,advancing)}
+    for(const [id,visual]of this.actors){if(!active.has(id)){visual.body.destroy();visual.outline.destroy();visual.wash.destroy();this.actors.delete(id)}}
+    for(const impact of model.impacts){
+      const progress=1-impact.life/impact.max,color=TEAM_COLORS[impact.team],radius=8+progress*29
+      this.fx.lineStyle(3*(1-progress)+.5,color,1-progress);this.fx.strokeCircle(impact.x,impact.y,radius)
+      this.fx.lineStyle(2,0xfff4d4,1-progress)
+      for(let i=0;i<5;i++){const angle=impact.angle+(i-2)*.65,inner=8+progress*15,outer=inner+9*(1-progress);this.fx.lineBetween(impact.x+Math.cos(angle)*inner,impact.y+Math.sin(angle)*inner,impact.x+Math.cos(angle)*outer,impact.y+Math.sin(angle)*outer)}
+    }
     const activeProjectiles=new Set<number>()
     for(const bullet of model.bullets){
       activeProjectiles.add(bullet.id)
       let visual=this.projectiles.get(bullet.id)
       if(!visual){visual={sprite:this.add.sprite(bullet.x,bullet.y,'projectiles').setOrigin(bullet.team==='rope'?.74:.5,.5).setDepth(28),trail:[]};this.projectiles.set(bullet.id,visual)}
       if(advancing){visual.trail.push({x:bullet.x,y:bullet.y});if(visual.trail.length>6)visual.trail.shift()}
-      const angle=Math.atan2(bullet.vy,bullet.vx),phase=this.clock*22+bullet.id,color=bullet.team==='rope'?0xf0c990:bullet.team==='ally'?0xa5efd3:0xf68c6e
+      const angle=Math.atan2(bullet.vy,bullet.vx),phase=this.clock*22+bullet.id,color=bullet.team==='rope'?0xf0c990:TEAM_COLORS[bullet.team]
       const size=bullet.team==='rope'?54:30+Math.sin(phase)*2
       visual.sprite.setFrame(projectileFrame(bullet.team,this.clock,bullet.id)).setPosition(bullet.x,bullet.y).setDisplaySize(size,size).setRotation(angle+(bullet.team==='rope'?Math.sin(phase)*.08:this.clock*2)).setAlpha(bullet.returning?.84:1)
       for(let i=1;i<visual.trail.length;i++){
