@@ -18,11 +18,12 @@ export class StreetScene extends Phaser.Scene {
   private captureRequested = false
   constructor(bridge:GameBridge){super('street');this.bridge=bridge}
   preload() {
-    this.load.image('city','/assets/city.webp')
-    this.load.image('hero','/assets/hero.png')
-    this.load.image('melee','/assets/melee.png')
-    this.load.image('ranged','/assets/ranged.png')
-    this.load.image('elite','/assets/elite.png')
+    const assets=`${import.meta.env.BASE_URL}assets/`
+    this.load.image('city',`${assets}city.webp`)
+    this.load.image('hero',`${assets}hero.png`)
+    this.load.image('melee',`${assets}melee.png`)
+    this.load.image('ranged',`${assets}ranged.png`)
+    this.load.image('elite',`${assets}elite.png`)
   }
   create() {
     const {model}=this.bridge

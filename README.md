@@ -17,6 +17,14 @@ npm run build
 npm run preview
 ```
 
+部署到子路径时，构建时传入完整路径（以 `/` 结尾），例如：
+
+```bash
+npm run build -- --base=/games/xiaoqiang/
+```
+
+将 `dist/` 作为静态文件发布。服务端应把无尾斜杠的路径重定向到带 `/` 的入口，去掉路由前缀后再查找文件，并启用 gzip 或 zstd。默认构建仍支持站点根路径；游戏素材、编队图标和 favicon 会跟随构建路径。
+
 测试命令需要 Node.js 22.18+（原生 TypeScript type stripping）。构建结果位于 `dist/`，可部署至任意静态网站服务。
 
 ## 玩法
