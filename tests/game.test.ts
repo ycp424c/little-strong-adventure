@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { GameModel, walkable, DURATION } from '../src/game/model.ts'
+import { GameModel, walkable, DURATION, STAGES } from '../src/game/model.ts'
 const idle={x:0,y:0,aimX:1200,aimY:900,fire:false,dash:false,rally:false}
 test('自动攻击：无需按攻击键即可捕获普通怪物',()=>{
   const m=new GameModel(()=>.5);m.start();m.enemies=[];m.spawnEnemy('ranged',1150,945)
@@ -51,7 +51,17 @@ test('街区精英和怪物潮同时触发时也遵守敌人数量上限',()=>{
   const m=new GameModel(()=>.5);m.start();for(let i=0;i<100;i++)m.spawnEnemy()
   assert.equal(m.enemies.length,85);m.time=239.99;m.update(.05,idle);assert.ok(m.enemies.length<=85)
 })
-test('十分钟压力流程：五段推进、精英刷新、敌群受限、全程无数值异常',()=>{
+test('支路尽头和地图边界的出生点始终在道路上，且不贴脸生成',()=>{
+  const spots=[{x:900,y:60},{x:900,y:1740},{x:2700,y:60},{x:4500,y:1740},{x:70,y:900},{x:5330,y:900},{x:820,y:945}]
+  for(const spot of spots)for(let angle=0;angle<24;angle++){
+    const m=new GameModel(()=>angle/24);Object.assign(m.player,spot);m.spawnEnemy()
+    assert.equal(m.enemies.length,1,`没有生成敌人 ${JSON.stringify({spot,angle})}`)
+    const enemy=m.enemies[0]
+    assert.ok(walkable(enemy.x,enemy.y),`敌人生成在建筑里 ${JSON.stringify({spot,enemy})}`)
+    assert.ok(Math.hypot(enemy.x-spot.x,enemy.y-spot.y)>=290,`敌人贴脸生成 ${JSON.stringify({spot,enemy})}`)
+  }
+})
+test('十分钟模拟稳定性：五段推进、精英刷新、敌群受限、全程无数值异常',()=>{
   let seed=17;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296}
   const m=new GameModel(random);m.start();m.player.hp=m.player.maxHp=100000;let sawElite=false,maxEnemies=0
   for(let i=0;i<=DURATION*20+40;i++){
@@ -65,4 +75,20 @@ test('十分钟压力流程：五段推进、精英刷新、敌群受限、全�
   }
   assert.equal(m.stage,4);assert.ok(sawElite);assert.ok(maxEnemies>10);assert.ok(m.time>=600)
   m.player.x=4820;m.player.y=900;if(m.status==='upgrade')m.chooseUpgrade(m.upgradeChoices[0].id);m.update(.05,idle);assert.equal(m.status,'won')
+})
+test('正常生命的玩家通过走位和强化，可以完成十分钟回家流程',()=>{
+  let seed=1
+  const m=new GameModel(()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296})
+  m.start()
+  for(let i=0;i<13000&&m.status!=='won'&&m.status!=='lost';i++){
+    if(m.status==='upgrade')m.chooseUpgrade((m.upgradeChoices.find(u=>u.id==='shield')??m.upgradeChoices.find(u=>u.id==='heart')??m.upgradeChoices.find(u=>u.id==='bolt')??m.upgradeChoices[0]).id)
+    const target=m.time>=DURATION?4850:STAGES[m.stage].x
+    let x=(target-m.player.x)*.02,y=Math.sin(m.time*.35)*.7
+    for(const enemy of m.enemies){
+      const dx=m.player.x-enemy.x,dy=m.player.y-enemy.y,distance=Math.hypot(dx,dy)
+      if(distance<130){x+=dx/(distance||1)*(130-distance)/50;y+=dy/(distance||1)*(130-distance)/50}
+    }
+    m.update(.05,{...idle,x:Math.max(-1,Math.min(1,x)),y:Math.max(-1,Math.min(1,y))})
+  }
+  assert.equal(m.status,'won');assert.ok(m.player.hp>0);assert.ok(m.time>=DURATION);assert.equal(m.visited.size,5)
 })

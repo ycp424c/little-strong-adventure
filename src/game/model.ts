@@ -29,6 +29,11 @@ export function walkable(x: number, y: number, radius = 16) {
   if (x < radius + 35 || x > WORLD.width-radius-35 || y < radius+35 || y > WORLD.height-radius-35) return false
   return Math.abs(y-900) < 236-radius || [900,2700,4500].some(cx => Math.abs(x-cx)<170-radius)
 }
+function streetSpawn(x: number, y: number) {
+  const px=clamp(x,60,WORLD.width-60),py=clamp(y,60,WORLD.height-60)
+  const candidates=[{x:px,y:clamp(py,705,1095)},...[900,2700,4500].map(cx=>({x:clamp(px,cx-140,cx+140),y:py}))]
+  return candidates.reduce((nearest,point)=>dist(point,{x,y})<dist(nearest,{x,y})?point:nearest)
+}
 export class GameModel {
   status: Status = 'ready'
   time = 0
@@ -73,13 +78,16 @@ export class GameModel {
   spawnEnemy(kind?: Kind, x?: number, y?: number, elite=false) {
     if(this.enemies.length>=85)return
     const a=this.random()*Math.PI*2
-    let sx=x??clamp(this.player.x+Math.cos(a)*650,60,WORLD.width-60)
-    let sy=y??clamp(this.player.y+Math.sin(a)*440,60,WORLD.height-60)
-    if (!walkable(sx,sy)) sy=clamp(sy,705,1095)
-    if(dist({x:sx,y:sy},this.player)<290) sx=clamp(this.player.x+(sx>this.player.x?500:-500),60,WORLD.width-60)
+    let spawn:{x:number;y:number}|undefined
+    for(let attempt=0;attempt<12;attempt++){
+      const angle=a+attempt*Math.PI/6
+      const point=streetSpawn(attempt===0&&x!==undefined?x:this.player.x+Math.cos(angle)*650,attempt===0&&y!==undefined?y:this.player.y+Math.sin(angle)*440)
+      if(walkable(point.x,point.y)&&dist(point,this.player)>=290){spawn=point;break}
+    }
+    if(!spawn)return
     elite=elite||(this.time>180&&this.random()<.02+this.time/12000)
     const hp=elite?3+Math.floor(this.time/120):1+Math.floor(this.time/240)
-    this.enemies.push({ id:++this.uid,x:sx,y:sy,kind:kind??(this.random()<.28+this.time/1900?'ranged':'melee'),hp,maxHp:hp,tier:1,cd:1+this.random(),elite,angle:0,flash:0 })
+    this.enemies.push({ id:++this.uid,...spawn,kind:kind??(this.random()<.28+this.time/1900?'ranged':'melee'),hp,maxHp:hp,tier:1,cd:1+this.random(),elite,angle:0,flash:0 })
   }
   recruit(kind: Kind, x=this.player.x, y=this.player.y) {
     this.captured++;this.xp++;this.kills++

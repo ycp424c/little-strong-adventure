@@ -14,6 +14,7 @@ function App() {
   const [ready,setReady]=useState(false)
   const [loadError,setLoadError]=useState('')
   const [help,setHelp]=useState(false)
+  const helpRef=useRef(false)
   const [muted,setMuted]=useState(()=>{try{return localStorage.getItem('xiaoqiang-muted')==='true'}catch{return false}})
   const mutedRef=useRef(muted)
   const viewport=useRef<HTMLDivElement>(null)
@@ -28,7 +29,7 @@ function App() {
     let disposed=false
     void Promise.all([import('phaser'),import('./game/scene')]).then(([{default:Phaser},{StreetScene}])=>{
       if(disposed||!viewport.current)return
-      const bridge={get model(){return modelRef.current},onChange:()=>redraw(v=>v+1),onReady:()=>setReady(true),onPause:()=>{modelRef.current.togglePause();redraw(v=>v+1)},muted:()=>mutedRef.current,move:move.current}
+      const bridge={get model(){return modelRef.current},onChange:()=>redraw(v=>v+1),onReady:()=>setReady(true),onPause:()=>{if(!helpRef.current){modelRef.current.togglePause();redraw(v=>v+1)}},muted:()=>mutedRef.current,move:move.current}
       const game=new Phaser.Game({type:Phaser.AUTO,parent:viewport.current,backgroundColor:'#738776',width:viewport.current.clientWidth,height:viewport.current.clientHeight,scale:{mode:Phaser.Scale.RESIZE,autoCenter:Phaser.Scale.CENTER_BOTH},render:{antialias:true,pixelArt:false,roundPixels:true},scene:[new StreetScene(bridge)],audio:{noAudio:true},input:{activePointers:3},banner:false})
       gameRef.current=game
       const resize=new ResizeObserver(()=>{if(viewport.current&&gameRef.current)gameRef.current.scale.resize(viewport.current.clientWidth,viewport.current.clientHeight)})
@@ -42,8 +43,9 @@ function App() {
   const refresh=()=>redraw(v=>v+1)
   const start=()=>{model.start();refresh();shell.current?.scrollIntoView({behavior:'smooth',block:'start'})}
   const restart=()=>{modelRef.current=new GameModel();move.current.x=0;move.current.y=0;move.current.dash=false;gameRef.current?.events.emit('reset');modelRef.current.start();refresh();shell.current?.scrollIntoView({behavior:'smooth',block:'start'})}
-  const togglePause=()=>{model.togglePause();refresh()}
-  const showHelp=()=>{if(model.status==='running')model.togglePause();setHelp(true);refresh()}
+  const togglePause=()=>{if(!helpRef.current){model.togglePause();refresh()}}
+  const showHelp=()=>{helpRef.current=true;if(model.status==='running')model.togglePause();setHelp(true);refresh()}
+  const closeHelp=(resume=false)=>{helpRef.current=false;setHelp(false);if(resume&&model.status==='paused')model.togglePause();refresh()}
   const choose=(u:Upgrade)=>{model.chooseUpgrade(u.id);refresh()}
   const fullscreen=()=>{if(document.fullscreenElement)void document.exitFullscreen();else void shell.current?.requestFullscreen().catch(()=>{})}
   const joystick=(event:PointerEvent<HTMLDivElement>)=>{
@@ -94,7 +96,7 @@ function App() {
       <section className="feature-notes"><div><span className="feature-icon coral"><Plunger/></span><div><h3>吸住，就算自己人</h3><p>绳索皮搋子自动锁敌，命中后收编为僚机。<br/>精英有护甲，记得多给它几下。</p></div><span className="feature-index">01</span></div><div><span className="feature-icon green"><Swords size={25}/></span><div><h3>组队，才好回家</h3><p>近战护卫挡在前面，远程射手自动开火。<br/>三合一升到三级，组建你的最强小队。</p></div><span className="feature-index">02</span></div><div><span className="feature-icon yellow"><Zap size={25}/></span><div><h3>越接近家，越不简单</h3><p>敌群逐渐变密，精英开始现身。<br/>吃补给、选强化，边走位边变强。</p></div><span className="feature-index">03</span></div></section>
     </main>
     <footer><span>小强历险记 <i>©</i> 2026</span><p>献给每个努力下班、认真回家的人。</p><span className="footer-sign">MADE FOR A LITTLE ESCAPE <span>✳</span></span></footer>
-    {help&&<div className="help-backdrop" onClick={()=>setHelp(false)}><section className="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e=>e.stopPropagation()}><Button variant="ghost" size="icon" className="close-help" aria-label="关闭玩法说明" onClick={()=>setHelp(false)}><X size={20}/></Button><div className="card-kicker">THE SURVIVAL HANDBOOK</div><h2 id="help-title">小强的下班生存指南</h2><p>这是一个 10 分钟的自动攻击生存游戏。你负责走位，其他交给小强。</p><ol><li><Footprints/><div><strong>走位躲开怪物与橙色弹幕</strong><p>WASD / 方向键移动，空格冲刺。手机使用左下角摇杆。</p></div></li><li><Plunger/><div><strong>自动捕获，组成小队</strong><p>皮搋子会瞄准最近敌人。普通怪初始命中即捕获，后期会增强护甲；精英初始有 3 层护甲，后期更厚。僚机攻击会消灭敌人并带来经验。</p></div></li><li><Sparkles/><div><strong>同类、同级，三个自动合一</strong><p>3 个 1 级合成 2 级，3 个 2 级合成 3 级。最高 3 级。近战获得范围攻击，3 级射手获得三发散射。编队满员时仍可触发合成，否则转化为治疗。</p></div></li><li><Home/><div><strong>活过十分钟，走到家门口</strong><p>每两分钟推进一个街区。黄色标记是当前街区补给；绿色十字回复 25 点生命。经验满后选强化，10:00 后前往地图最右侧的家。</p></div></li></ol><Button size="large" onClick={()=>{setHelp(false);if(model.status==='paused')togglePause()}}>明白了，出发<ChevronRight size={18}/></Button></section></div>}
+    {help&&<div className="help-backdrop" onClick={()=>closeHelp()}><section className="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e=>e.stopPropagation()}><Button variant="ghost" size="icon" className="close-help" aria-label="关闭玩法说明" onClick={()=>closeHelp()}><X size={20}/></Button><div className="card-kicker">THE SURVIVAL HANDBOOK</div><h2 id="help-title">小强的下班生存指南</h2><p>这是一个 10 分钟的自动攻击生存游戏。你负责走位，其他交给小强。</p><ol><li><Footprints/><div><strong>走位躲开怪物与橙色弹幕</strong><p>WASD / 方向键移动，空格冲刺。手机使用左下角摇杆。</p></div></li><li><Plunger/><div><strong>自动捕获，组成小队</strong><p>皮搋子会瞄准最近敌人。普通怪初始命中即捕获，后期会增强护甲；精英初始有 3 层护甲，后期更厚。僚机攻击会消灭敌人并带来经验。</p></div></li><li><Sparkles/><div><strong>同类、同级，三个自动合一</strong><p>3 个 1 级合成 2 级，3 个 2 级合成 3 级。最高 3 级。近战获得范围攻击，3 级射手获得三发散射。编队满员时仍可触发合成，否则转化为治疗。</p></div></li><li><Home/><div><strong>活过十分钟，走到家门口</strong><p>每两分钟推进一个街区。黄色标记是当前街区补给；绿色十字回复 25 点生命。经验满后选强化，10:00 后前往地图最右侧的家。</p></div></li></ol><Button size="large" onClick={()=>closeHelp(true)}>明白了，出发<ChevronRight size={18}/></Button></section></div>}
   </div>
 }
 export default App
