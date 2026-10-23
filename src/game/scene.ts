@@ -1,7 +1,7 @@
 import Phaser from 'phaser'
 import { GameModel, STAGES, WORLD, type Actor, type Control } from './model'
 
-export type GameBridge = { model: GameModel; onChange: () => void; onReady: () => void; onPause: () => void; muted: () => boolean; move: { x:number;y:number;dash:boolean } }
+export type GameBridge = { model: GameModel; onChange: () => void; onReady: () => void; onPause: () => void; muted: () => boolean; move: { x:number;y:number;dash:boolean;fire:boolean } }
 export class StreetScene extends Phaser.Scene {
   bridge: GameBridge
   private actors = new Map<number, Phaser.GameObjects.Image>()
@@ -15,6 +15,7 @@ export class StreetScene extends Phaser.Scene {
   private marker!: Phaser.GameObjects.Container
   private markerText!: Phaser.GameObjects.Text
   private lastStatus = 'ready'
+  private captureRequested = false
   constructor(bridge:GameBridge){super('street');this.bridge=bridge}
   preload() {
     this.load.image('city','/assets/city.webp')
@@ -45,18 +46,20 @@ export class StreetScene extends Phaser.Scene {
     camera.setBounds(0,0,WORLD.width,WORLD.height);camera.setZoom(1)
     camera.startFollow(this.playerSprite,true,.085,.085,0,0)
     if(this.input.keyboard){
-      this.keys=this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,ESC,P') as Record<string,Phaser.Input.Keyboard.Key>
+      this.keys=this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,ESC,P,F') as Record<string,Phaser.Input.Keyboard.Key>
       this.input.keyboard.on('keydown-ESC',()=>this.bridge.onPause())
       this.input.keyboard.on('keydown-P',()=>this.bridge.onPause())
       this.input.keyboard.addCapture(['UP','DOWN','LEFT','RIGHT','SPACE'])
     }
-    this.game.canvas.setAttribute('aria-label','小强历险记游戏画面，使用 WASD 或方向键移动，角色自动攻击')
+    this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>{if(pointer.leftButtonDown()&&this.bridge.model.status==='running')this.captureRequested=true})
+    this.game.canvas.setAttribute('aria-label','小强历险记游戏画面，WASD 或方向键移动，F 或鼠标左键手动捕获，自动瞄准最近敌人')
     this.game.canvas.setAttribute('role','img')
     this.game.events.on('reset',this.reset,this)
     this.events.once('shutdown',()=>{this.game.events.off('reset',this.reset,this);this.audio?.close()})
     this.bridge.onReady()
   }
   private reset() {
+    this.captureRequested=false
     for(const image of this.actors.values())image.destroy();this.actors.clear()
     for(const label of this.labels.values())label.destroy();this.labels.clear()
     this.playerSprite.setPosition(this.bridge.model.player.x,this.bridge.model.player.y)
@@ -95,9 +98,18 @@ export class StreetScene extends Phaser.Scene {
     const dt=Math.min(delta/1000,.05)
     if(model.status==='running')this.clock+=dt
     const k=this.keys
-    const control:Control={x:(k?.D.isDown||k?.RIGHT.isDown?1:0)-(k?.A.isDown||k?.LEFT.isDown?1:0)+move.x,y:(k?.S.isDown||k?.DOWN.isDown?1:0)-(k?.W.isDown||k?.UP.isDown?1:0)+move.y,aimX:p.x+100,aimY:p.y,fire:true,dash:!!k?.SPACE.isDown||move.dash,rally:false}
+    const control:Control={x:(k?.D.isDown||k?.RIGHT.isDown?1:0)-(k?.A.isDown||k?.LEFT.isDown?1:0)+move.x,y:(k?.S.isDown||k?.DOWN.isDown?1:0)-(k?.W.isDown||k?.UP.isDown?1:0)+move.y,fire:!!(k?.F&&Phaser.Input.Keyboard.JustDown(k.F))||this.captureRequested||move.fire,dash:!!k?.SPACE.isDown||move.dash,rally:false}
+    this.captureRequested=false;move.fire=false
     model.update(dt,control)
     this.fx.clear()
+    const target=model.weaponTarget
+    if(target&&model.status==='running'){
+      const angle=Math.atan2(target.enemy.y-p.y,target.enemy.x-p.x),length=Math.min(target.distance,model.weaponRange),color=target.inRange?0xe9d88e:0xd2d9c8
+      this.fx.lineStyle(1,color,model.weaponCooldown>0?.14:.3)
+      for(let d=24;d<length-8;d+=18)this.fx.lineBetween(p.x+Math.cos(angle)*d,p.y+Math.sin(angle)*d,p.x+Math.cos(angle)*Math.min(d+9,length),p.y+Math.sin(angle)*Math.min(d+9,length))
+      this.fx.lineStyle(1,color,target.inRange?.48:.2);this.fx.strokeCircle(target.enemy.x,target.enemy.y,target.enemy.elite?45:34)
+      if(!target.inRange){this.fx.lineStyle(1,0xe9d88e,.13);this.fx.strokeCircle(p.x,p.y,model.weaponRange)}
+    }
     this.fx.fillStyle(0x132d25,.35);this.fx.fillEllipse(p.x,p.y+26,48,18)
     this.fx.lineStyle(2,0xf0d573,.9);this.fx.strokeEllipse(p.x,p.y+22,63,30)
     this.playerSprite.setPosition(p.x,p.y+(model.status==='running'&&(control.x||control.y)?Math.sin(this.clock*13)*2:0)).setDepth(20+p.y*.001)

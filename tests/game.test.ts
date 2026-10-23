@@ -1,11 +1,100 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { GameModel, walkable, DURATION, STAGES } from '../src/game/model.ts'
-const idle={x:0,y:0,aimX:1200,aimY:900,fire:false,dash:false,rally:false}
-test('自动攻击：无需按攻击键即可捕获普通怪物',()=>{
-  const m=new GameModel(()=>.5);m.start();m.enemies=[];m.spawnEnemy('ranged',1150,945)
-  for(let i=0;i<30;i++)m.update(.05,idle)
-  assert.ok(m.captured>=1);assert.ok(m.allies.some(a=>a.kind==='ranged'))
+import { GameModel, walkable, DURATION, STAGES, UPGRADES, type Kind } from '../src/game/model.ts'
+const idle={x:0,y:0,fire:false,dash:false,rally:false}
+function encounter(kind:Kind='melee',distance=150,hp=1){
+  const m=new GameModel(()=>.5);m.start();m.enemies=[];m.player.x=1600;m.player.y=900
+  m.spawnEnemy(kind,2000,900);Object.assign(m.enemies[0],{x:m.player.x+distance,y:900,hp,maxHp:hp,cd:100})
+  return m
+}
+test('主角不会自动攻击，主动出手会捕获当前最近的普通敌人',()=>{
+  const m=encounter();m.spawnEnemy('ranged',2100,900)
+  for(let i=0;i<10;i++)m.update(.05,idle)
+  assert.equal(m.captured,0);assert.equal(m.bullets.length,0);assert.equal(m.weaponCooldown,0)
+  const closest=m.weaponTarget!.enemy.id
+  m.update(.05,{...idle,fire:true})
+  for(let i=0;i<8;i++)m.update(.05,idle)
+  assert.equal(m.captured,1);assert.equal(m.allies[0].kind,'melee');assert.ok(!m.enemies.some(e=>e.id===closest));assert.ok(m.weaponCooldown>0)
+})
+test('瞄准随走位切换最近敌人，射程外不消耗冷却',()=>{
+  const m=encounter('ranged',320);m.spawnEnemy('melee',2100,900)
+  assert.equal(m.weaponTarget!.enemy.kind,'ranged');assert.equal(m.weaponTarget!.inRange,false)
+  m.update(.05,{...idle,fire:true});assert.equal(m.weaponCooldown,0);assert.ok(!m.bullets.some(b=>b.team==='rope'))
+  m.player.x=2110;m.update(.05,idle);assert.equal(m.weaponTarget!.enemy.kind,'melee')
+  m.update(.05,{...idle,fire:true});assert.equal(m.weaponCooldown,m.weaponCooldownMax)
+})
+test('基础冷却为2.4秒，按住不连发，冷却内的出手不会排队',()=>{
+  const m=encounter('melee',90,30)
+  assert.equal(m.weaponCooldownMax,2.4)
+  m.update(.05,{...idle,fire:true})
+  for(let i=0;i<60;i++)m.update(.05,{...idle,fire:true})
+  assert.equal(m.sounds.filter(s=>s==='shot').length,1);assert.equal(m.weaponCooldown,0)
+  m.update(.05,idle);m.update(.05,{...idle,fire:true})
+  assert.equal(m.sounds.filter(s=>s==='shot').length,2)
+  m.update(.05,idle);m.update(.05,{...idle,fire:true})
+  for(let i=0;i<60;i++)m.update(.05,{...idle,fire:true})
+  assert.equal(m.sounds.filter(s=>s==='shot').length,2)
+})
+test('无目标不会浪费出手，暂停冻结冷却并吞掉暂停期间的按键',()=>{
+  const m=encounter('melee',90,30);m.update(.05,{...idle,fire:true});const cd=m.weaponCooldown
+  m.togglePause();for(let i=0;i<60;i++)m.update(.05,{...idle,fire:true})
+  assert.equal(m.weaponCooldown,cd);m.weaponCooldown=0;m.togglePause();m.update(.05,{...idle,fire:true})
+  assert.equal(m.sounds.filter(s=>s==='shot').length,1)
+  m.enemies=[];m.update(.05,idle);m.update(.05,{...idle,fire:true});assert.equal(m.weaponCooldown,0)
+})
+test('武器强化保留至少1.2秒冷却，最大射程仍小于远程怪的游走距离',()=>{
+  const m=encounter('melee',90,30);m.update(.05,{...idle,fire:true})
+  for(let i=0;i<15;i++){m.status='upgrade';m.upgradeChoices=[UPGRADES.find(u=>u.id==='rope')!];m.chooseUpgrade('rope');assert.ok(m.weaponCooldown<=m.weaponCooldownMax)}
+  assert.equal(m.weaponCooldownMax,1.2);assert.equal(m.weaponRange,300)
+})
+test('射程最后一段在不同帧率下都能命中，不会提前回收导致空耗冷却',()=>{
+  for(const dt of [.05,1/60,.01])for(const distance of [235,238,239,240]){
+    const m=encounter('ranged');m.player.x=5348-distance
+    Object.assign(m.enemies[0],{x:5348,y:900,cd:100})
+    assert.equal(m.weaponTarget!.inRange,true)
+    m.update(dt,{...idle,fire:true});for(let i=0;i<Math.ceil(1/dt);i++)m.update(dt,idle)
+    assert.equal(m.captured,1,`射程内目标未命中：distance=${distance}, dt=${dt}`)
+  }
+})
+test('不同强化射程下，落空的皮搋子都能正常收回，不会越过主角来回振荡',()=>{
+  for(const dt of [.05,1/60,.01])for(const upgrades of [0,1,2]){
+    const m=encounter('ranged',200,30)
+    for(let i=0;i<upgrades;i++){m.status='upgrade';m.upgradeChoices=[UPGRADES.find(u=>u.id==='rope')!];m.chooseUpgrade('rope')}
+    m.update(dt,{...idle,fire:true});m.enemies=[]
+    for(let i=0;i<Math.ceil(1.2/dt);i++)m.update(dt,idle)
+    assert.equal(m.captured,0)
+    assert.ok(!m.bullets.some(b=>b.team==='rope'),`返航未结束：range=${m.weaponRange}, dt=${dt}`)
+  }
+})
+test('近战主动靠近且易捕，远程会退到捕获射程外',()=>{
+  const melee=encounter('melee',320),ranged=encounter('ranged',320)
+  melee.update(.05,idle);ranged.update(.05,idle)
+  assert.ok(melee.weaponTarget!.distance<320);assert.ok(ranged.weaponTarget!.distance>320)
+  assert.ok(ranged.weaponTarget!.distance>ranged.weaponRange)
+})
+test('远程僚机能攻击近战够不到的敌人，且单次伤害更高',()=>{
+  const melee=encounter('melee',500,30),ranged=encounter('melee',500,30)
+  melee.recruit('melee');ranged.recruit('ranged');for(let i=0;i<5;i++){melee.update(.05,idle);ranged.update(.05,idle)}
+  assert.ok(!melee.bullets.some(b=>b.team==='ally'));assert.ok(ranged.bullets.some(b=>b.team==='ally'))
+  const closeMelee=encounter('melee',30,30),closeRanged=encounter('melee',30,30)
+  closeMelee.weaponCooldown=1;closeRanged.weaponCooldown=1
+  closeMelee.recruit('melee');closeRanged.recruit('ranged');for(let i=0;i<10;i++){closeMelee.update(.05,idle);closeRanged.update(.05,idle)}
+  assert.ok(closeRanged.enemies[0].hp<closeMelee.enemies[0].hp)
+})
+test('捕获武器就绪时，僚机会留出附近瞄准目标并攻击其他敌人',()=>{
+  const m=encounter('ranged',320),target=m.enemies[0]
+  m.spawnEnemy('melee',2200,900);m.recruit('ranged')
+  for(let i=0;i<35;i++)m.update(.05,idle)
+  assert.ok(m.enemies.includes(target));assert.equal(target.hp,1);assert.ok(m.kills>1);assert.equal(m.captured,1)
+  m.player.x=target.x-180;m.update(.05,{...idle,fire:true});for(let i=0;i<12;i++)m.update(.05,idle)
+  assert.ok(!m.enemies.includes(target));assert.equal(m.captured,2)
+})
+test('皮搋子飞行期间也为主角保留目标，不让僚机抢先击杀',()=>{
+  const m=encounter('melee',190);m.recruit('ranged');m.allies[0].cd=0
+  const target=m.enemies[0];m.update(.05,{...idle,fire:true})
+  assert.equal(target.hp,1);assert.ok(!m.bullets.some(b=>b.team==='ally'))
+  for(let i=0;i<10;i++)m.update(.05,idle)
+  assert.equal(m.captured,2);assert.ok(m.allies.some(a=>a.kind==='melee'))
 })
 test('三个同类一级合成二级，九个同类合成三级',()=>{
   const m=new GameModel();for(let i=0;i<3;i++)m.recruit('melee')
@@ -45,7 +134,7 @@ test('道路碰撞阻止穿过建筑，斜向移动不会增加速度',()=>{
 })
 test('家门在十分钟前锁定，满十分钟抵达后胜利',()=>{
   const m=new GameModel();m.start();m.enemies=[];m.player.x=4820;m.time=599;m.update(.05,idle)
-  assert.notEqual(m.status,'won');m.time=600;m.update(.05,idle);assert.equal(m.status,'won')
+  assert.notEqual(m.status,'won');m.time=600;m.xp=100;m.update(.05,idle);assert.equal(m.status,'won')
 })
 test('街区精英和怪物潮同时触发时也遵守敌人数量上限',()=>{
   const m=new GameModel(()=>.5);m.start();for(let i=0;i<100;i++)m.spawnEnemy()
@@ -68,7 +157,7 @@ test('十分钟模拟稳定性：五段推进、精英刷新、敌群受限、�
     if(m.status==='upgrade')m.chooseUpgrade(m.upgradeChoices[0].id)
     const target=1000+Math.min(4,Math.floor(m.time/120))*900
     const dx=target-m.player.x
-    m.update(.05,{...idle,x:Math.abs(dx)>20?Math.sign(dx):0})
+    m.update(.05,{...idle,x:Math.abs(dx)>20?Math.sign(dx):0,fire:i%2===0&&m.weaponCooldown===0&&!!m.weaponTarget?.inRange})
     sawElite ||= m.enemies.some(a=>a.elite);maxEnemies=Math.max(maxEnemies,m.enemies.length)
     assert.ok(Number.isFinite(m.player.x)&&Number.isFinite(m.player.hp));assert.ok(m.enemies.length<=85);assert.ok(m.allies.every(a=>a.tier<=3))
     if(m.status==='won')break
@@ -76,7 +165,7 @@ test('十分钟模拟稳定性：五段推进、精英刷新、敌群受限、�
   assert.equal(m.stage,4);assert.ok(sawElite);assert.ok(maxEnemies>10);assert.ok(m.time>=600)
   m.player.x=4820;m.player.y=900;if(m.status==='upgrade')m.chooseUpgrade(m.upgradeChoices[0].id);m.update(.05,idle);assert.equal(m.status,'won')
 })
-test('正常生命的玩家通过走位和强化，可以完成十分钟回家流程',()=>{
+test('正常生命下主动接近远程怪并手动捕获，可以完成十分钟回家流程',()=>{
   let seed=1
   const m=new GameModel(()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296})
   m.start()
@@ -84,11 +173,20 @@ test('正常生命的玩家通过走位和强化，可以完成十分钟回家�
     if(m.status==='upgrade')m.chooseUpgrade((m.upgradeChoices.find(u=>u.id==='shield')??m.upgradeChoices.find(u=>u.id==='heart')??m.upgradeChoices.find(u=>u.id==='bolt')??m.upgradeChoices[0]).id)
     const target=m.time>=DURATION?4850:STAGES[m.stage].x
     let x=(target-m.player.x)*.02,y=Math.sin(m.time*.35)*.7
+    const ranged=m.enemies.filter(e=>e.kind==='ranged'&&!e.elite).sort((a,b)=>Math.hypot(a.x-m.player.x,a.y-m.player.y)-Math.hypot(b.x-m.player.x,b.y-m.player.y))[0]
+    let dash=false
+    if(m.time<DURATION&&ranged&&m.weaponCooldown<.6&&m.allies.filter(a=>a.kind==='ranged').length<3){
+      const dx=ranged.x-m.player.x,dy=ranged.y-m.player.y,distance=Math.hypot(dx,dy)
+      if(distance<850){x=dx/(distance||1);y=dy/(distance||1);dash=distance>m.weaponRange&&distance<430}
+    }
     for(const enemy of m.enemies){
       const dx=m.player.x-enemy.x,dy=m.player.y-enemy.y,distance=Math.hypot(dx,dy)
-      if(distance<130){x+=dx/(distance||1)*(130-distance)/50;y+=dy/(distance||1)*(130-distance)/50}
+      if(distance<85){x+=dx/(distance||1)*(85-distance)/35;y+=dy/(distance||1)*(85-distance)/35}
     }
-    m.update(.05,{...idle,x:Math.max(-1,Math.min(1,x)),y:Math.max(-1,Math.min(1,y))})
+    const aim=m.weaponTarget
+    // 后退中的射手可能躲开射程末端的皮搋子，靠近后再出手，为飞行时间留出余量。
+    const fire=i%2===0&&m.weaponCooldown===0&&!!aim?.inRange&&((aim.enemy.kind==='ranged'&&aim.distance<m.weaponRange-60)||aim.distance<100||m.allies.length<2)
+    m.update(.05,{...idle,x:Math.max(-1,Math.min(1,x)),y:Math.max(-1,Math.min(1,y)),fire,dash})
   }
   assert.equal(m.status,'won');assert.ok(m.player.hp>0);assert.ok(m.time>=DURATION);assert.equal(m.visited.size,5)
 })

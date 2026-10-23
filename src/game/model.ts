@@ -3,11 +3,12 @@ export type Status = 'ready' | 'running' | 'paused' | 'upgrade' | 'won' | 'lost'
 export type Actor = { id: number; x: number; y: number; hp: number; maxHp: number; kind: Kind; tier: number; cd: number; elite?: boolean; angle: number; flash: number }
 export type Bullet = { id: number; x: number; y: number; vx: number; vy: number; life: number; team: 'rope' | 'enemy' | 'ally'; damage: number; returning?: boolean; distance: number }
 export type Effect = { x: number; y: number; text: string; color: string; life: number; max: number }
-export type Control = { x: number; y: number; aimX: number; aimY: number; fire: boolean; dash: boolean; rally: boolean }
+export type Control = { x: number; y: number; fire: boolean; dash: boolean; rally: boolean }
+export type WeaponTarget = { enemy: Actor; distance: number; inRange: boolean }
 export type Upgrade = { id: string; name: string; tag: string; description: string; icon: 'rope' | 'heart' | 'team' | 'bolt' | 'shield' | 'speed' }
 export const UPGRADES: Upgrade[] = [
   { id: 'speed', name: '快一点下班', tag: '机动强化', description: '移动速度 +18%，冲刺冷却减少 0.5 秒。', icon: 'speed' },
-  { id: 'rope', name: '祖传加长绳', tag: '武器强化', description: '皮搋子射程 +25%，发射间隔减少 12%。', icon: 'rope' },
+  { id: 'rope', name: '祖传加长绳', tag: '武器强化', description: '捕获射程 +15%（最高 300），冷却减少 12%（最低 1.2 秒）。', icon: 'rope' },
   { id: 'heart', name: '打工人的韧性', tag: '生存强化', description: '生命上限 +25，立即回复 40 点生命。', icon: 'heart' },
   { id: 'team', name: '再带两个兄弟', tag: '编队扩容', description: '僚机上限 +2（最多 10 个），全队回复生命。', icon: 'team' },
   { id: 'bolt', name: '街头特训', tag: '僚机强化', description: '所有僚机攻击伤害 +30%，攻击间隔减少 10%。', icon: 'bolt' },
@@ -52,18 +53,19 @@ export class GameModel {
   capacity = 6
   stage = 0
   upgradeChoices: Upgrade[] = []
-  autoFire = true
   message = '第一站 · 马桶店街口'
   messageUntil = 7
   visited = new Set<number>()
   sounds: string[] = []
   private uid = 0
   private spawnCd = 2
-  private shotCd = 0
+  weaponCooldown = 0
+  private fireHeld = false
+  private captureInFlightId?: number
   private pickupCd = 24
   private speed = 190
-  private shotInterval = .46
-  private range = 500
+  private shotInterval = 2.4
+  private range = 240
   private armor = 1
   private power = 1
   private allyArmor = 1
@@ -72,6 +74,13 @@ export class GameModel {
   private wave = 0
   random: () => number
   constructor(random: () => number = Math.random) { this.random=random }
+  get weaponCooldownMax() { return this.shotInterval }
+  get weaponRange() { return this.range }
+  get weaponTarget(): WeaponTarget | undefined {
+    let nearest: Actor | undefined, distance=Infinity
+    for(const enemy of this.enemies){const d=dist(enemy,this.player);if(enemy.hp>0&&d<distance){nearest=enemy;distance=d}}
+    return nearest?{enemy:nearest,distance,inRange:distance<=this.range}:undefined
+  }
   start() { if (this.status === 'ready') { this.status='running'; for(let i=0;i<4;i++)this.spawnEnemy(i%2 ? 'ranged':'melee',1100+i*95,850+(i%2)*100) } }
   togglePause() { if(this.status==='running')this.status='paused';else if(this.status==='paused')this.status='running' }
   text(x:number,y:number,text:string,color='#f5d65b',life=1.4) {this.effects.push({x,y,text,color,life,max:life})}
@@ -86,7 +95,7 @@ export class GameModel {
     }
     if(!spawn)return
     elite=elite||(this.time>180&&this.random()<.02+this.time/12000)
-    const hp=elite?3+Math.floor(this.time/120):1+Math.floor(this.time/240)
+    const hp=elite?3+Math.floor(this.time/120):1
     this.enemies.push({ id:++this.uid,...spawn,kind:kind??(this.random()<.28+this.time/1900?'ranged':'melee'),hp,maxHp:hp,tier:1,cd:1+this.random(),elite,angle:0,flash:0 })
   }
   recruit(kind: Kind, x=this.player.x, y=this.player.y) {
@@ -114,7 +123,7 @@ export class GameModel {
     if(this.status!=='upgrade'||!this.upgradeChoices.some(u=>u.id===id))return
     switch(id){
       case 'speed':this.speed*=1.18;this.dashMax=Math.max(1.5,this.dashMax-.5);break
-      case 'rope':this.range*=1.25;this.shotInterval*=.88;break
+      case 'rope':this.range=Math.min(300,this.range*1.15);this.shotInterval=Math.max(1.2,this.shotInterval*.88);this.weaponCooldown=Math.min(this.weaponCooldown,this.shotInterval);break
       case 'heart':this.player.maxHp+=25;this.player.hp=Math.min(this.player.maxHp,this.player.hp+40);break
       case 'team':this.capacity=Math.min(10,this.capacity+2);this.allies.forEach(a=>a.hp=a.maxHp);break
       case 'bolt':this.power*=1.3;break
@@ -135,7 +144,7 @@ export class GameModel {
   private hitEnemy(enemy:Actor,damage:number,capture:boolean) {
     if(enemy.hp<=0)return
     enemy.hp-=damage;enemy.flash=.12
-    if(enemy.hp>0){this.text(enemy.x,enemy.y,'护甲破裂','#f4a56c');return}
+    if(enemy.hp>0){this.text(enemy.x,enemy.y,enemy.elite?'护甲破裂':'命中','#f4a56c');return}
     if(capture){this.recruit(enemy.kind,enemy.x,enemy.y);if(enemy.elite){this.player.hp=Math.min(this.player.maxHp,this.player.hp+18);this.text(enemy.x,enemy.y-45,'精英捕获 · 生命 +18')}}
     else {this.kills++;this.xp+=.45;this.text(enemy.x,enemy.y,'+能量','#b5dbba',.65);if(this.random()<.08)this.pickups.push({id:++this.uid,x:enemy.x,y:enemy.y,life:22})}
   }
@@ -144,6 +153,8 @@ export class GameModel {
     this.bullets.push({id:++this.uid,x,y,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed,team,damage,life:team==='rope'?3:3.1,distance:0})
   }
   update(dt:number,input:Control) {
+    const firePressed=input.fire&&!this.fireHeld
+    this.fireHeld=input.fire
     if(this.status!=='running')return
     dt=Math.min(dt,.05);this.time+=dt
     const p=this.player
@@ -151,14 +162,15 @@ export class GameModel {
     const len=Math.hypot(input.x,input.y)||1
     if(input.dash&&p.dashCd===0&&(input.x||input.y)){p.dash=.19;p.dashCd=this.dashMax;p.invincible=.3;this.sounds.push('dash')}
     this.move(p,input.x/len*this.speed*(p.dash>0?3.8:1),input.y/len*this.speed*(p.dash>0?3.8:1),dt)
-    p.angle=Math.atan2(input.aimY-p.y,input.aimX-p.x)
+    const aimTarget=this.weaponTarget
+    if(aimTarget)p.angle=Math.atan2(aimTarget.enemy.y-p.y,aimTarget.enemy.x-p.x)
     if(input.rally&&p.rallyCd===0){p.rallyCd=10;this.rallyTime=2.3;this.allies.forEach(a=>a.hp=Math.min(a.maxHp,a.hp+15));this.enemies.forEach(e=>{const d=dist(e,p);if(d<210){const angle=Math.atan2(e.y-p.y,e.x-p.x);this.move(e,Math.cos(angle)*120,Math.sin(angle)*120,1);}});this.text(p.x,p.y,'集结！全队回复','#a5dfd0');this.sounds.push('merge')}
-    this.shotCd-=dt
-    if((input.fire||this.autoFire)&&this.shotCd<=0){
-      let angle=p.angle
-      if(this.autoFire){let nearest:Actor|undefined;let nd=this.range;for(const e of this.enemies){const d=dist(e,p);if(e.hp>0&&d<nd){nearest=e;nd=d}}if(nearest)angle=Math.atan2(nearest.y-p.y,nearest.x-p.x);else angle=p.angle}
-      this.fire(p.x,p.y,angle,'rope');this.shotCd=this.shotInterval;this.sounds.push('shot')
+    this.weaponCooldown=Math.max(0,this.weaponCooldown-dt)
+    if(firePressed&&this.weaponCooldown===0){
+      if(aimTarget?.inRange){this.captureInFlightId=aimTarget.enemy.id;this.fire(p.x,p.y,p.angle,'rope');this.weaponCooldown=this.shotInterval;this.sounds.push('shot')}
+      else this.text(p.x,p.y-12,aimTarget?'目标太远 · 先靠近':'走位寻找捕获目标','#e3d7b3',1)
     }
+    const reservedTarget=this.enemies.find(e=>e.id===this.captureInFlightId)??(this.weaponCooldown===0&&aimTarget&&aimTarget.distance<=this.range+200?aimTarget.enemy:undefined)
     const stage=Math.min(4,Math.floor(this.time/120))
     if(stage!==this.stage){this.stage=stage;this.message=`第 ${stage+1} 站 · ${STAGES[stage].name}`;this.messageUntil=this.time+6;for(let i=0;i<stage+1;i++)this.spawnEnemy('melee',undefined,undefined,true);this.sounds.push('upgrade')}
     const target=STAGES[stage]
@@ -173,48 +185,52 @@ export class GameModel {
       if(e.hp<=0)continue
       e.flash=Math.max(0,e.flash-dt);e.cd-=dt
       let target:{x:number;y:number;hp:number}=p,nd=dist(e,p)
-      for(const ally of this.allies){const d=dist(e,ally);if(d<nd*.85){target=ally;nd=d}}
+      if(e.kind==='melee')for(const ally of this.allies){const d=dist(e,ally);if(ally.hp>0&&d<nd*.85){target=ally;nd=d}}
       e.angle=Math.atan2(target.y-e.y,target.x-e.x)
-      const speed=(e.kind==='melee'?94:75)*(1+this.time/1200)*(e.elite?1.22:1)
-      if(e.kind==='melee'||nd>285||this.rallyTime>0)this.move(e,Math.cos(e.angle)*speed,Math.sin(e.angle)*speed,dt)
-      else if(nd<170)this.move(e,-Math.cos(e.angle)*speed*.7,-Math.sin(e.angle)*speed*.7,dt)
+      const speed=(e.kind==='melee'?94:95)*(1+this.time/1200)*(e.elite?1.22:1)
+      if(e.kind==='melee'||nd>420||this.rallyTime>0)this.move(e,Math.cos(e.angle)*speed,Math.sin(e.angle)*speed,dt)
+      else if(nd<365)this.move(e,-Math.cos(e.angle)*Math.min(175,speed*1.4),-Math.sin(e.angle)*Math.min(175,speed*1.4),dt)
       if(e.kind==='melee'&&nd<(e.elite?47:33)&&e.cd<=0){const damage=(e.elite?23:10)*(1+this.time/1200);if(target===p)this.hurtPlayer(damage);else{target.hp-=damage/this.allyArmor;this.text(target.x,target.y,'−','#f09a82',.4)}e.cd=.95}
       if(e.kind==='ranged'&&nd<540&&e.cd<=0){this.fire(e.x,e.y,e.angle,'enemy',8);if(this.time>360){this.fire(e.x,e.y,e.angle+.18,'enemy',6);this.fire(e.x,e.y,e.angle-.18,'enemy',6)}e.cd=Math.max(1.25,2.5-this.time/800)}
     }
     for(let i=0;i<this.allies.length;i++){
       const a=this.allies[i];a.cd-=dt;a.flash=Math.max(0,a.flash-dt)
-      let enemy:Actor|undefined,nd=a.kind==='melee'?330:510
-      if(this.rallyTime<=0)for(const e of this.enemies){const d=dist(a,e);if(e.hp>0&&d<nd){nd=d;enemy=e}}
+      let enemy:Actor|undefined,nd=a.kind==='melee'?290:620
+      if(this.rallyTime<=0)for(const e of this.enemies){const d=dist(a,e);if(e.hp>0&&e!==reservedTarget&&d<nd){nd=d;enemy=e}}
       const orbit=i*2.399+this.time*.1;let tx=p.x+Math.cos(orbit)*78,ty=p.y+Math.sin(orbit)*66
       if(enemy){a.angle=Math.atan2(enemy.y-a.y,enemy.x-a.x);if(a.kind==='melee'){tx=enemy.x;ty=enemy.y}}
       const d=Math.hypot(tx-a.x,ty-a.y);if(d>12){const speed=dist(a,p)>420?350:225;this.move(a,(tx-a.x)/d*speed,(ty-a.y)/d*speed,dt)}
-      const damage=[0,.8,2.1,5.2][a.tier]*this.power
+      const damage=(a.kind==='melee'?[0,.65,1.5,3.5]:[0,1.1,2.8,6.5])[a.tier]*this.power
       if(enemy&&a.cd<=0){
-        if(a.kind==='melee'&&nd<46+a.tier*12){const radius=[0,58,85,125][a.tier];this.enemies.forEach(e=>{if(e.hp>0&&dist(a,e)<radius)this.hitEnemy(e,damage,false)});this.text(a.x,a.y,'✦',a.tier===3?'#ffe18b':'#d5e5bc',.25);a.cd=.85/Math.sqrt(this.power)}
-        else if(a.kind==='ranged'){this.fire(a.x,a.y,a.angle,'ally',damage);if(a.tier===3){this.fire(a.x,a.y,a.angle-.16,'ally',damage*.7);this.fire(a.x,a.y,a.angle+.16,'ally',damage*.7)}a.cd=1.1/Math.sqrt(this.power)}
+        if(a.kind==='melee'&&nd<46+a.tier*12){const radius=[0,58,75,100][a.tier];if(a.tier===1)this.hitEnemy(enemy,damage,false);else this.enemies.forEach(e=>{if(e.hp>0&&e!==reservedTarget&&dist(a,e)<radius)this.hitEnemy(e,damage,false)});this.text(a.x,a.y,'✦',a.tier===3?'#ffe18b':'#d5e5bc',.25);a.cd=1.1/Math.sqrt(this.power)}
+        else if(a.kind==='ranged'){this.fire(a.x,a.y,a.angle,'ally',damage);if(a.tier===3){this.fire(a.x,a.y,a.angle-.16,'ally',damage*.7);this.fire(a.x,a.y,a.angle+.16,'ally',damage*.7)}a.cd=1.2/Math.sqrt(this.power)}
       }
     }
     for(const b of this.bullets){
       b.life-=dt
-      if(b.team==='rope'&&b.returning){const d=dist(b,p);if(d<25){b.life=0;continue}b.vx=(p.x-b.x)/d*1100;b.vy=(p.y-b.y)/d*1100}
-      const oldX=b.x,oldY=b.y;b.x+=b.vx*dt;b.y+=b.vy*dt;b.distance+=Math.hypot(b.vx,b.vy)*dt
-      if(b.team==='rope'&&!b.returning&&b.distance>this.range)b.returning=true
+      if(b.team==='rope'&&b.returning){const d=dist(b,p);if(d<=Math.max(25,1100*dt)){b.life=0;continue}b.vx=(p.x-b.x)/d*1100;b.vy=(p.y-b.y)/d*1100}
+      const oldX=b.x,oldY=b.y,outbound=b.team==='rope'&&!b.returning
+      const step=Math.hypot(b.vx,b.vy)*dt,travel=outbound?Math.min(step,Math.max(0,this.range-b.distance)):step,ratio=step?travel/step:0
+      b.x+=b.vx*dt*ratio;b.y+=b.vy*dt*ratio;b.distance+=travel
+      const reachedRange=outbound&&b.distance>=this.range
       if(!walkable(b.x,b.y,3)){if(b.team==='rope')b.returning=true;else b.life=0}
       if(b.team==='enemy'){
         if(dist(b,p)<22){this.hurtPlayer(b.damage);b.life=0}
         else for(const a of this.allies)if(dist(b,a)<22){a.hp-=b.damage/this.allyArmor;b.life=0;break}
       }else if(!b.returning){
-        for(const e of this.enemies){if(e.hp<=0)continue;const vx=b.x-oldX,vy=b.y-oldY,den=vx*vx+vy*vy;const t=den?clamp(((e.x-oldX)*vx+(e.y-oldY)*vy)/den,0,1):0;const distance=Math.hypot(e.x-(oldX+t*vx),e.y-(oldY+t*vy));if(distance<(e.elite?36:24)){this.hitEnemy(e,b.damage,b.team==='rope');if(b.team==='rope')b.returning=true;else b.life=0;break}}
+        for(const e of this.enemies){if(e.hp<=0||(b.team==='ally'&&e===reservedTarget))continue;const vx=b.x-oldX,vy=b.y-oldY,den=vx*vx+vy*vy;const t=den?clamp(((e.x-oldX)*vx+(e.y-oldY)*vy)/den,0,1):0;const distance=Math.hypot(e.x-(oldX+t*vx),e.y-(oldY+t*vy));if(distance<(e.elite?36:24)){this.hitEnemy(e,b.damage,b.team==='rope');if(b.team==='rope')b.returning=true;else b.life=0;break}}
       }
+      if(reachedRange)b.returning=true
     }
     this.enemies=this.enemies.filter(e=>e.hp>0&&dist(e,p)<1800)
     this.allies=this.allies.filter(a=>{if(a.hp<=0){this.text(a.x,a.y,'僚机倒下了','#efbca6');return false}return true})
     this.bullets=this.bullets.filter(b=>b.life>0)
+    if(!this.bullets.some(b=>b.team==='rope'&&!b.returning))this.captureInFlightId=undefined
     for(const pickup of this.pickups){pickup.life-=dt;if(dist(pickup,p)<38){pickup.life=0;p.hp=Math.min(p.maxHp,p.hp+25);this.text(p.x,p.y,'生命 +25','#ade8cb');this.sounds.push('capture')}}
     this.pickups=this.pickups.filter(a=>a.life>0)
     for(const e of this.effects){e.life-=dt;e.y-=dt*19}this.effects=this.effects.filter(e=>e.life>0)
-    if(this.status==='running'&&this.xp>=this.nextXp){this.level++;this.xp-=this.nextXp;this.nextXp+=7;this.upgradeChoices=[...UPGRADES].filter(u=>(u.id!=='team'||this.capacity<10)&&(u.id!=='shield'||this.armor>.4)).map(u=>({u,s:this.random()})).sort((a,b)=>a.s-b.s).slice(0,3).map(a=>a.u);this.status='upgrade';this.sounds.push('upgrade')}
     if(this.status==='running'&&this.time>=DURATION&&p.x>4650&&Math.abs(p.y-900)<235){this.status='won';this.sounds.push('upgrade')}
+    if(this.status==='running'&&this.xp>=this.nextXp){this.level++;this.xp-=this.nextXp;this.nextXp+=7;this.upgradeChoices=[...UPGRADES].filter(u=>(u.id!=='team'||this.capacity<10)&&(u.id!=='shield'||this.armor>.4)&&(u.id!=='rope'||this.range<300||this.shotInterval>1.2)).map(u=>({u,s:this.random()})).sort((a,b)=>a.s-b.s).slice(0,3).map(a=>a.u);this.status='upgrade';this.sounds.push('upgrade')}
     if(this.time>=DURATION&&this.message!=='家门已打开 · 前往最右侧的家'){this.message='家门已打开 · 前往最右侧的家';this.messageUntil=this.time+60}
   }
 }
