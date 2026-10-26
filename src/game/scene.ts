@@ -91,13 +91,13 @@ export class StreetScene extends Phaser.Scene {
     camera.setBounds(0,0,WORLD.width,WORLD.height);camera.setZoom(1)
     camera.startFollow(this.playerSprite,true,.085,.085,0,0)
     if(this.input.keyboard){
-      this.keys=this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,ESC,P,F') as Record<string,Phaser.Input.Keyboard.Key>
+      this.keys=this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,ESC,P,F,Q') as Record<string,Phaser.Input.Keyboard.Key>
       this.input.keyboard.on('keydown-ESC',()=>this.bridge.onPause())
       this.input.keyboard.on('keydown-P',()=>this.bridge.onPause())
       this.input.keyboard.addCapture(['UP','DOWN','LEFT','RIGHT','SPACE'])
     }
     this.input.on('pointerdown',(pointer:Phaser.Input.Pointer)=>{if(pointer.leftButtonDown()&&this.bridge.model.status==='running')this.captureRequested=true})
-    this.game.canvas.setAttribute('aria-label','小强历险记游戏画面，WASD 或方向键移动，F 或鼠标左键攻击最近敌人；精英先扣血破甲，退化为一级普通怪后再次命中才能捕获，离开红圈躲避砸地')
+    this.game.canvas.setAttribute('aria-label','小强历险记游戏画面，WASD 或方向键移动，Q 切换捕获偏好，F 或鼠标左键攻击锁定敌人；精英先扣血破甲，退化为一级普通怪后再次命中才能捕获，离开红圈躲避砸地')
     this.game.canvas.setAttribute('role','img')
     this.game.events.on('reset',this.reset,this)
     this.events.once('shutdown',()=>{this.game.events.off('reset',this.reset,this);this.audio?.close()})
@@ -154,6 +154,46 @@ export class StreetScene extends Phaser.Scene {
       }
     }
   }
+  private drawAbilityEffects() {
+    const {model}=this.bridge,fx=this.fx
+    for(const ally of model.allies){
+      if(ally.hp<=0)continue
+      if(ally.kind==='melee'&&model.rank('barrier')&&!(ally.barrierCd??0)){
+        fx.lineStyle(3,0x93e3f4,.75);fx.beginPath();fx.arc(ally.x,ally.y,35,ally.angle-.9,ally.angle+.9);fx.strokePath()
+      }
+      if((ally.shield??0)>0){fx.lineStyle(2,0xafeaff,.45+Math.sin(this.clock*4)*.15);fx.strokeCircle(ally.x,ally.y,39)}
+      if(model.inspireTime>0){fx.lineStyle(1.5,0xffde8b,.45);fx.strokeEllipse(ally.x,ally.y+23,70,24)}
+      if(ally.kind==='melee'&&model.rank('cover')&&Math.hypot(ally.x-model.player.x,ally.y-model.player.y)<(model.rank('cover')>=2?200:120)){
+        fx.lineStyle(1,0x95dfe5,.18);fx.lineBetween(ally.x,ally.y,model.player.x,model.player.y)
+      }
+    }
+    for(const enemy of model.enemies)if((enemy.slow??0)>0){
+      fx.lineStyle((enemy.frozen??0)>0?3:1.5,0xa9edff,(enemy.frozen??0)>0?.85:.45);fx.strokeEllipse(enemy.x,enemy.y+24,65,25)
+      if((enemy.frozen??0)>0){fx.lineBetween(enemy.x-18,enemy.y-20,enemy.x+18,enemy.y+20);fx.lineBetween(enemy.x+18,enemy.y-20,enemy.x-18,enemy.y+20)}
+    }
+    for(const effect of model.abilityEffects){
+      const progress=1-effect.life/effect.max,alpha=1-progress,radius=effect.radius*(.3+progress*.7)
+      const color=effect.kind==='heal'?0x9ef2bd:effect.kind==='burst'||effect.kind==='inspire'?0xffd877:0xa5eaff
+      fx.lineStyle(3*alpha+.5,color,alpha)
+      if(effect.kind==='chain'){
+        const tx=effect.tx??effect.x,ty=effect.ty??effect.y,dx=tx-effect.x,dy=ty-effect.y
+        fx.beginPath();fx.moveTo(effect.x,effect.y)
+        for(let i=1;i<=6;i++){const t=i/6,bend=i===6?0:(i%2?1:-1)*7;fx.lineTo(effect.x+dx*t+Math.sin(effect.angle)*bend,effect.y+dy*t+bend)}
+        fx.strokePath()
+      }else{
+        if(effect.kind==='smash'){
+          const spread=Math.acos(.35)
+          fx.beginPath();fx.arc(effect.x,effect.y,radius,effect.angle-spread,effect.angle+spread);fx.strokePath()
+          fx.lineBetween(effect.x,effect.y,effect.x+Math.cos(effect.angle-spread)*radius,effect.y+Math.sin(effect.angle-spread)*radius)
+          fx.lineBetween(effect.x,effect.y,effect.x+Math.cos(effect.angle+spread)*radius,effect.y+Math.sin(effect.angle+spread)*radius)
+        }else fx.strokeCircle(effect.x,effect.y,radius)
+        if(effect.kind==='heal'){fx.lineBetween(effect.x-9*alpha,effect.y,effect.x+9*alpha,effect.y);fx.lineBetween(effect.x,effect.y-9*alpha,effect.x,effect.y+9*alpha)}
+        if(effect.kind==='burst'||effect.kind==='inspire')for(let i=0;i<8;i++){
+          const angle=i*Math.PI/4+progress*.6;fx.lineBetween(effect.x+Math.cos(angle)*radius*.7,effect.y+Math.sin(angle)*radius*.7,effect.x+Math.cos(angle)*(radius+7),effect.y+Math.sin(angle)*(radius+7))
+        }
+      }
+    }
+  }
   private syncActor(a:Actor,ally:boolean,dt:number,running:boolean) {
     let visual=this.actors.get(a.id)
     if(!visual){
@@ -168,7 +208,7 @@ export class StreetScene extends Phaser.Scene {
     visual.elite=!!a.elite
     if((a.elite||(a.weakened??0)>0)&&!visual.badge)visual.badge=this.add.text(a.x,a.y,'',{fontFamily:'"PingFang SC",sans-serif',fontSize:'11px',fontStyle:'bold',color:'#ffe0a3',stroke:'#392922',strokeThickness:4}).setOrigin(.5).setDepth(35)
     if(!a.elite&&!(a.weakened??0)){visual.badge?.destroy();visual.badge=undefined}
-    const pose=visual.animation.update(dt,{running,dx:a.x-visual.x,dy:a.y-visual.y,aimAngle:a.angle,attackAngle:a.attackSeq!==visual.attackSeq?a.angle:undefined})
+    const pose=visual.animation.update(dt,{running:running&&!(a.frozen??0),dx:a.x-visual.x,dy:a.y-visual.y,aimAngle:a.angle,attackAngle:a.attackSeq!==visual.attackSeq?a.angle:undefined})
     visual.x=a.x;visual.y=a.y;visual.attackSeq=a.attackSeq
     const size=a.elite?194+a.tier*18:ally?118+a.tier*12:132,color=ally?TEAM_COLORS.ally:TEAM_COLORS.enemy,depth=10+a.y*.001,slamPose=eliteSlamPose(a.slam),devolve=devolutionPose(a.weakened)
     const frame=a.slam?DIRECTIONS.indexOf(pose.direction)*8+slamPose.frame:pose.frame,originY=a.elite?.67:.5
@@ -206,6 +246,7 @@ export class StreetScene extends Phaser.Scene {
     const advancing=model.status==='running',oldX=p.x,oldY=p.y
     if(advancing)this.clock+=dt
     const k=this.keys
+    if(advancing&&k?.Q&&Phaser.Input.Keyboard.JustDown(k.Q))model.cycleCapturePreference()
     const control:Control={x:(k?.D.isDown||k?.RIGHT.isDown?1:0)-(k?.A.isDown||k?.LEFT.isDown?1:0)+move.x,y:(k?.S.isDown||k?.DOWN.isDown?1:0)-(k?.W.isDown||k?.UP.isDown?1:0)+move.y,fire:!!(k?.F&&Phaser.Input.Keyboard.JustDown(k.F))||this.captureRequested||move.fire,dash:!!k?.SPACE.isDown||move.dash,rally:false}
     this.captureRequested=false;move.fire=false
     model.update(dt,control)
@@ -216,13 +257,14 @@ export class StreetScene extends Phaser.Scene {
     if(this.playerSprite.texture.key!==heroTexture)this.playerSprite.setTexture(heroTexture,pose.frame).setDisplaySize(141,141)
     else this.playerSprite.setFrame(pose.frame)
     this.fx.clear()
-    this.groundFx.clear();this.drawGroundAttacks()
+    this.groundFx.clear();this.drawGroundAttacks();this.drawAbilityEffects()
     const target=model.weaponTarget
     if(target&&model.status==='running'){
-      const angle=Math.atan2(target.enemy.y-p.y,target.enemy.x-p.x),length=Math.min(target.distance,model.weaponRange),color=target.inRange?0xe9d88e:0xd2d9c8
+      const angle=Math.atan2(target.enemy.y-p.y,target.enemy.x-p.x),length=Math.min(target.distance,model.weaponRange),color=target.blockedBy?0xff9978:target.inRange?0xe9d88e:0xd2d9c8
       this.fx.lineStyle(1,color,model.weaponCooldown>0?.14:.3)
       for(let d=24;d<length-8;d+=18)this.fx.lineBetween(p.x+Math.cos(angle)*d,p.y+Math.sin(angle)*d,p.x+Math.cos(angle)*Math.min(d+9,length),p.y+Math.sin(angle)*Math.min(d+9,length))
       this.fx.lineStyle(1,color,target.inRange?.48:.2);this.fx.strokeCircle(target.enemy.x,target.enemy.y,target.enemy.elite?45:34)
+      if(target.blockedBy){this.fx.lineStyle(2,0xff866c,.75);this.fx.strokeCircle(target.blockedBy.x,target.blockedBy.y,28)}
       if(!target.inRange){this.fx.lineStyle(1,0xe9d88e,.13);this.fx.strokeCircle(p.x,p.y,model.weaponRange)}
     }
     this.fx.fillStyle(0x132d25,.35);this.fx.fillEllipse(p.x,p.y+26,48,18)
@@ -247,9 +289,9 @@ export class StreetScene extends Phaser.Scene {
       let visual=this.projectiles.get(bullet.id)
       if(!visual){visual={sprite:this.add.sprite(bullet.x,bullet.y,'projectiles').setOrigin(bullet.team==='rope'?.74:.5,.5).setDepth(28),trail:[]};this.projectiles.set(bullet.id,visual)}
       if(advancing){visual.trail.push({x:bullet.x,y:bullet.y});if(visual.trail.length>6)visual.trail.shift()}
-      const angle=Math.atan2(bullet.vy,bullet.vx),phase=this.clock*22+bullet.id,color=bullet.team==='rope'?0xf0c990:TEAM_COLORS[bullet.team]
+      const angle=Math.atan2(bullet.vy,bullet.vx),phase=this.clock*22+bullet.id,color=bullet.team==='rope'?0xf0c990:bullet.frost?0xa0e9ff:TEAM_COLORS[bullet.team]
       const size=bullet.team==='rope'?54:30+Math.sin(phase)*2
-      visual.sprite.setFrame(projectileFrame(bullet.team,this.clock,bullet.id)).setPosition(bullet.x,bullet.y).setDisplaySize(size,size).setRotation(angle+(bullet.team==='rope'?Math.sin(phase)*.08:this.clock*2)).setAlpha(bullet.returning?.84:1)
+      visual.sprite.setTint(bullet.frost?0xb8f1ff:0xffffff).setFrame(projectileFrame(bullet.team,this.clock,bullet.id)).setPosition(bullet.x,bullet.y).setDisplaySize(size,size).setRotation(angle+(bullet.team==='rope'?Math.sin(phase)*.08:this.clock*2)).setAlpha(bullet.returning?.84:1)
       for(let i=1;i<visual.trail.length;i++){
         const from=visual.trail[i-1],to=visual.trail[i]
         this.fx.lineStyle(1+i*.6,color,i/visual.trail.length*.35);this.fx.lineBetween(from.x,from.y,to.x,to.y)

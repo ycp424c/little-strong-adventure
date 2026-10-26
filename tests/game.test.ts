@@ -16,11 +16,12 @@ test('主角不会自动攻击，主动出手会捕获当前最近的普通敌�
   for(let i=0;i<8;i++)m.update(.05,idle)
   assert.equal(m.captured,1);assert.equal(m.allies[0].kind,'melee');assert.ok(!m.enemies.some(e=>e.id===closest));assert.ok(m.weaponCooldown>0)
 })
-test('瞄准随走位切换最近敌人，射程外不消耗冷却',()=>{
+test('稳定锁定保留原目标，离开锁定范围才重选，射程外不消耗冷却',()=>{
   const m=encounter('ranged',320);m.spawnEnemy('melee',2100,900)
   assert.equal(m.weaponTarget!.enemy.kind,'ranged');assert.equal(m.weaponTarget!.inRange,false)
   m.update(.05,{...idle,fire:true});assert.equal(m.weaponCooldown,0);assert.ok(!m.bullets.some(b=>b.team==='rope'))
-  m.player.x=2110;m.update(.05,idle);assert.equal(m.weaponTarget!.enemy.kind,'melee')
+  m.player.x=2110;m.update(.05,idle);assert.equal(m.weaponTarget!.enemy.kind,'ranged')
+  m.enemies[0].x=1500;m.update(.05,idle);assert.equal(m.weaponTarget!.enemy.kind,'melee')
   m.update(.05,{...idle,fire:true});assert.equal(m.weaponCooldown,m.weaponCooldownMax)
 })
 test('基础冷却为2.4秒，按住不连发，冷却内的出手不会排队',()=>{
@@ -165,14 +166,15 @@ test('十分钟模拟稳定性：五段推进、精英刷新、敌群受限、�
   assert.equal(m.stage,4);assert.ok(sawElite);assert.ok(maxEnemies>10);assert.ok(m.time>=600)
   m.player.x=4820;m.player.y=900;if(m.status==='upgrade')m.chooseUpgrade(m.upgradeChoices[0].id);m.update(.05,idle);assert.equal(m.status,'won')
 })
-test('正常生命下选择伙伴、寻找稀缺补给并预判弹幕，可以完成十分钟回家流程',()=>{
+test('正常生命下保持主路导航、选择伙伴并预判弹幕，可以完成十分钟回家流程',()=>{
   let seed=1
   const m=new GameModel(()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296})
   m.start()
   for(let i=0;i<13000&&m.status!=='won'&&m.status!=='lost';i++){
-    if(m.status==='upgrade')m.chooseUpgrade((m.upgradeChoices.find(u=>u.id==='shield')??m.upgradeChoices.find(u=>u.id==='heart')??m.upgradeChoices.find(u=>u.id==='bolt')??m.upgradeChoices[0]).id)
-    const target=m.time>=DURATION?4850:STAGES[m.stage].x
-    let x=(target-m.player.x)*.02,y=Math.sin(m.time*.35)*.7
+    if(m.status==='upgrade')m.chooseUpgrade((m.upgradeChoices.find(u=>u.id==='shield')??m.upgradeChoices.find(u=>u.id==='heart')??m.upgradeChoices.find(u=>u.id==='bolt')??m.upgradeChoices.find(u=>u.id==='ability:cover')??m.upgradeChoices.find(u=>u.id==='ability:medic')??m.upgradeChoices.find(u=>u.id==='ability:barrier')??m.upgradeChoices[0]).id)
+    // 提前向家靠拢，并给纵向移动一个回到主路的趋势，避免在支路尽头反复躲弹。
+    const target=m.time>=DURATION-45?4850:STAGES[m.stage].x
+    let x=(target-m.player.x)*.02,y=(900-m.player.y)*.02+Math.sin(m.time*.35)*.35
     const ranged=m.enemies.filter(e=>e.kind==='ranged'&&!e.elite).sort((a,b)=>Math.hypot(a.x-m.player.x,a.y-m.player.y)-Math.hypot(b.x-m.player.x,b.y-m.player.y))[0]
     let dash=false
     if(m.time<DURATION&&ranged&&m.weaponCooldown<.6&&m.allies.filter(a=>a.kind==='ranged').length<3){
