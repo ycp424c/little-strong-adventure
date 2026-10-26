@@ -1,3 +1,4 @@
+import { recruitAndFuse } from './helpers.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ELITE_RULES, ENEMY_BULLET_LIMIT, GameModel, rangedSpawnChance } from '../src/game/model.ts'
@@ -36,7 +37,7 @@ test('精英生命随时间与编队战力增加，自动瞄准最近敌人包�
   const normal=m.spawnEnemy('ranged',2000,900)!;Object.assign(normal,{x:1800,y:900,cd:100})
   assert.equal(m.weaponTarget!.enemy,enemy)
   normal.x=1620;assert.equal(m.weaponTarget!.enemy,normal)
-  m.time=180;m.recruit('ranged');m.recruit('ranged');m.recruit('ranged')
+  m.time=180;recruitAndFuse(m,'ranged',3)
   const stronger=m.spawnEnemy('melee',2000,900,true)!
   assert.ok(stronger.maxHp>initial)
 })
@@ -65,10 +66,10 @@ test('每次普通出手只扣精英血量，不会提前捕获',()=>{
 test('新精英等级对应存活僚机的最高等级，旧精英不随编队变化跳级',()=>{
   const m=arena(),first=m.spawnEnemy('melee',2000,900,true)!
   assert.equal(first.tier,1)
-  for(let i=0;i<3;i++)m.recruit('ranged')
+  recruitAndFuse(m,'ranged',3)
   const second=m.spawnEnemy('melee',2000,900,true)!
   assert.equal(second.tier,2);assert.ok(second.maxHp>first.maxHp)
-  for(let i=0;i<6;i++)m.recruit('ranged')
+  recruitAndFuse(m,'ranged',6)
   const third=m.spawnEnemy('melee',2000,900,true)!
   assert.equal(third.tier,3);assert.ok(third.maxHp>second.maxHp);assert.equal(first.tier,1)
   m.allies[0].hp=0;assert.equal(m.eliteTier,1)

@@ -1,3 +1,4 @@
+import { recruitAndFuse } from './helpers.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { GameModel, walkable, DURATION, STAGES, UPGRADES, ELITE_RULES, type Kind } from '../src/game/model.ts'
@@ -97,27 +98,27 @@ test('皮搋子飞行期间也为主角保留目标，不让僚机抢先击杀',
   for(let i=0;i<10;i++)m.update(.05,idle)
   assert.equal(m.captured,2);assert.ok(m.allies.some(a=>a.kind==='melee'))
 })
-test('三个同类一级合成二级，九个同类合成三级',()=>{
-  const m=new GameModel();for(let i=0;i<3;i++)m.recruit('melee')
+test('一级确认纯近战配方后合成二级，九个同类经配方与自动升阶合成三级',()=>{
+  const m=new GameModel();recruitAndFuse(m,'melee',3)
   assert.equal(m.allies.length,1);assert.equal(m.allies[0].tier,2)
-  for(let i=0;i<6;i++)m.recruit('melee')
+  recruitAndFuse(m,'melee',6)
   assert.equal(m.allies.length,1);assert.equal(m.allies[0].tier,3);assert.equal(m.merges,4)
 })
-test('不同类型和不同等级不会混合合成',()=>{
-  const m=new GameModel();m.recruit('melee');m.recruit('melee');m.recruit('ranged')
+test('一级保留到确认配方，不同等级不会被混合消耗',()=>{
+  const m=new GameModel();m.start();m.recruit('melee');m.recruit('melee');m.recruit('ranged')
   assert.equal(m.allies.length,3);assert.ok(m.allies.every(a=>a.tier===1))
-  m.recruit('melee');m.recruit('melee');m.recruit('ranged')
+  m.recruit('melee');m.openFusion();m.mergeRecipe('guard');m.recruit('melee');m.recruit('ranged')
   assert.equal(m.allies.filter(a=>a.kind==='melee'&&a.tier===2).length,1)
   assert.equal(m.allies.filter(a=>a.kind==='melee'&&a.tier===1).length,1)
 })
 test('三级封顶，三只三级不会继续合成',()=>{
-  const m=new GameModel();for(let i=0;i<27;i++)m.recruit('ranged')
+  const m=new GameModel();recruitAndFuse(m,'ranged',27)
   assert.equal(m.allies.length,3);assert.ok(m.allies.every(a=>a.tier===3))
 })
-test('满编时仍能捕获第三个同类触发合成，不匹配则治疗',()=>{
-  const m=new GameModel();m.capacity=3;m.recruit('melee');m.recruit('melee');m.recruit('ranged');m.recruit('melee')
+test('满编候补可确认配方合成，候补已满时额外捕获转治疗',()=>{
+  const m=new GameModel();m.start();m.capacity=3;m.recruit('melee');m.recruit('melee');m.recruit('ranged');m.recruit('melee');m.openFusion();m.mergeRecipe('guard')
   assert.equal(m.allies.length,2);assert.equal(m.allies[1].tier,2)
-  const n=new GameModel();n.capacity=2;n.recruit('melee');n.recruit('ranged');n.allies[0].hp=10;n.recruit('ranged')
+  const n=new GameModel();n.capacity=2;n.recruit('melee');n.recruit('ranged');n.allies[0].hp=10;n.recruit('ranged');n.recruit('ranged')
   assert.equal(n.allies.length,2);assert.equal(n.allies[0].hp,22)
 })
 test('暂停和升级时战斗、计时均冻结，强化仅能选择一次',()=>{
@@ -156,6 +157,7 @@ test('十分钟模拟稳定性：五段推进、精英刷新、敌群受限、�
   const m=new GameModel(random);m.start();m.player.hp=m.player.maxHp=100000;let sawElite=false,maxEnemies=0
   for(let i=0;i<=DURATION*20+40;i++){
     if(m.status==='upgrade')m.chooseUpgrade(m.upgradeChoices[0].id)
+    const recipe=m.fusionRecipes.find(r=>r.ready);if(recipe){m.openFusion();m.mergeRecipe(recipe.id)}
     const target=1000+Math.min(4,Math.floor(m.time/120))*900
     const dx=target-m.player.x
     m.update(.05,{...idle,x:Math.abs(dx)>20?Math.sign(dx):0,fire:i%2===0&&m.weaponCooldown===0&&!!m.weaponTarget?.inRange})
@@ -172,10 +174,16 @@ test('正常生命下保持主路导航、选择伙伴并预判弹幕，可以�
   m.start()
   for(let i=0;i<13000&&m.status!=='won'&&m.status!=='lost';i++){
     if(m.status==='upgrade')m.chooseUpgrade((m.upgradeChoices.find(u=>u.id==='shield')??m.upgradeChoices.find(u=>u.id==='heart')??m.upgradeChoices.find(u=>u.id==='bolt')??m.upgradeChoices.find(u=>u.id==='ability:cover')??m.upgradeChoices.find(u=>u.id==='ability:medic')??m.upgradeChoices.find(u=>u.id==='ability:barrier')??m.upgradeChoices[0]).id)
+    // 先凑回旋盾卫/重装前排，再凑纯远程射手；按材料缺口切换捕获偏好。
+    const ready=m.fusionRecipes.filter(r=>r.ready),hasTank=m.allies.some(a=>a.kind==='melee'&&a.tier>=2)
+    const recipe=hasTank?(ready.find(r=>r.id==='shooter')??(m.allies.length>=m.capacity?ready.find(r=>r.id==='bulwark')??ready.find(r=>r.id==='guard'):undefined)):ready.find(r=>r.id==='bulwark')??ready.find(r=>r.id==='guard')
+    const preference=hasTank||m.allies.filter(a=>a.kind==='melee'&&a.tier===1).length>=2?'ranged':'melee'
+    if(m.capturePreference!==preference)m.setCapturePreference(preference)
+    if(recipe){m.openFusion();m.mergeRecipe(recipe.id)}
     // 提前向家靠拢，并给纵向移动一个回到主路的趋势，避免在支路尽头反复躲弹。
     const target=m.time>=DURATION-45?4850:STAGES[m.stage].x
     let x=(target-m.player.x)*.02,y=(900-m.player.y)*.02+Math.sin(m.time*.35)*.35
-    const ranged=m.enemies.filter(e=>e.kind==='ranged'&&!e.elite).sort((a,b)=>Math.hypot(a.x-m.player.x,a.y-m.player.y)-Math.hypot(b.x-m.player.x,b.y-m.player.y))[0]
+    const ranged=m.capturePreference==='ranged'?m.weaponTarget?.enemy:m.enemies.filter(e=>e.kind==='ranged'&&!e.elite).sort((a,b)=>Math.hypot(a.x-m.player.x,a.y-m.player.y)-Math.hypot(b.x-m.player.x,b.y-m.player.y))[0]
     let dash=false
     if(m.time<DURATION&&ranged&&m.weaponCooldown<.6&&m.allies.filter(a=>a.kind==='ranged').length<3){
       const dx=ranged.x-m.player.x,dy=ranged.y-m.player.y,distance=Math.hypot(dx,dy)
@@ -185,6 +193,8 @@ test('正常生命下保持主路导航、选择伙伴并预判弹幕，可以�
     const weakened=m.enemies.filter(e=>(e.weakened??0)>0).sort((a,b)=>Math.hypot(a.x-m.player.x,a.y-m.player.y)-Math.hypot(b.x-m.player.x,b.y-m.player.y))[0]
     const priority=supply??(m.weaponCooldown<.6&&m.allies.filter(a=>a.kind==='melee').length<2?weakened:undefined)
     if(priority){const dx=priority.x-m.player.x,dy=priority.y-m.player.y,d=Math.hypot(dx,dy);if(d<1000){x=dx/(d||1);y=dy/(d||1);dash=d>220}}
+    // 临近本街区结束时优先走到补给点，再继续按材料追怪；后续仍照常躲弹与闪避精英。
+    if(m.time<DURATION&&!m.visited.has(m.stage)&&m.time%120>70){x=(STAGES[m.stage].x-m.player.x)*.02;y=(900-m.player.y)*.02}
     for(const enemy of m.enemies){
       const dx=m.player.x-enemy.x,dy=m.player.y-enemy.y,distance=Math.hypot(dx,dy)
       const margin=enemy.elite?240:85
@@ -243,5 +253,5 @@ test('正常生命下保持主路导航、选择伙伴并预判弹幕，可以�
     const fire=i%2===0&&m.weaponCooldown===0&&!!aim?.inRange&&(aim.enemy.elite||(aim.enemy.kind==='ranged'&&aim.distance<m.weaponRange-60)||((m.allies.filter(a=>a.kind==='melee').length<2||aim.distance<55)&&aim.distance<100)||m.allies.length<2)
     m.update(.05,{...idle,x:Math.max(-1,Math.min(1,x)),y:Math.max(-1,Math.min(1,y)),fire,dash})
   }
-  assert.equal(m.status,'won');assert.ok(m.player.hp>0);assert.ok(m.time>=DURATION);assert.equal(m.visited.size,5)
+  assert.equal(m.status,'won',JSON.stringify({time:m.time,hp:m.player.hp,captured:m.captured,merges:m.merges,allies:m.allies.map(a=>[a.form,a.tier])}));assert.ok(m.player.hp>0);assert.ok(m.time>=DURATION);assert.equal(m.visited.size,5,JSON.stringify([...m.visited]));assert.ok(m.merges>0)
 })

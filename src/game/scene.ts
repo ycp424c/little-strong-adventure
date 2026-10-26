@@ -1,13 +1,14 @@
 import Phaser from 'phaser'
+import { COMPANIONS, companionForm, companionName } from './companions'
 import { ELITE_RULES, GameModel, STAGES, WORLD, type Actor, type Control } from './model'
-import { DIRECTIONS, HERO_FRAME_SIZE, MONSTER_FRAME_SIZE, PROJECTILE_FRAME_SIZE, HeroAnimator, MonsterAnimator, TEAM_COLORS, devolutionPose, eliteSlamPose, hitReaction, projectileFrame } from './animation'
+import { DIRECTIONS, HERO_FRAME_SIZE, MONSTER_FRAME_SIZE, PROJECTILE_FRAME_SIZE, HeroAnimator, MonsterAnimator, TEAM_COLORS, devolutionPose, fusionPose, eliteSlamPose, hitReaction, projectileFrame } from './animation'
 import { loadRatio } from './loading'
 
 type ActorVisual={body:Phaser.GameObjects.Sprite;outline:Phaser.GameObjects.Sprite;wash:Phaser.GameObjects.Sprite;badge?:Phaser.GameObjects.Text;shell?:{sprite:Phaser.GameObjects.Sprite;width:number;height:number};elite:boolean;animation:MonsterAnimator;attackSeq:number;x:number;y:number}
 const CITY_SECTIONS=['west','central','east'] as const
 const CITY_ROWS=['top','bottom'] as const
 
-export type GameBridge = { model: GameModel; onChange: () => void; onReady: () => void; onProgress: (ratio:number) => void; onPause: () => void; muted: () => boolean; move: { x:number;y:number;dash:boolean;fire:boolean } }
+export type GameBridge = { model: GameModel; onChange: () => void; onReady: () => void; onProgress: (ratio:number) => void; onPause: () => void; onFusion: () => void; muted: () => boolean; move: { x:number;y:number;dash:boolean;fire:boolean } }
 export class StreetScene extends Phaser.Scene {
   bridge: GameBridge
   private actors = new Map<number, ActorVisual>()
@@ -91,7 +92,7 @@ export class StreetScene extends Phaser.Scene {
     camera.setBounds(0,0,WORLD.width,WORLD.height);camera.setZoom(1)
     camera.startFollow(this.playerSprite,true,.085,.085,0,0)
     if(this.input.keyboard){
-      this.keys=this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,ESC,P,F,Q') as Record<string,Phaser.Input.Keyboard.Key>
+      this.keys=this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,ESC,P,F,Q,E') as Record<string,Phaser.Input.Keyboard.Key>
       this.input.keyboard.on('keydown-ESC',()=>this.bridge.onPause())
       this.input.keyboard.on('keydown-P',()=>this.bridge.onPause())
       this.input.keyboard.addCapture(['UP','DOWN','LEFT','RIGHT','SPACE'])
@@ -156,9 +157,20 @@ export class StreetScene extends Phaser.Scene {
   }
   private drawAbilityEffects() {
     const {model}=this.bridge,fx=this.fx
+    for(const effect of model.fusionEffects){
+      const progress=1-effect.life/effect.max,pull=Math.min(1,progress/.7),ease=pull*pull*(3-2*pull),color=COMPANIONS[effect.form].color
+      for(let i=0;i<effect.ingredients.length;i++){
+        const ingredient=effect.ingredients[i],angle=i*Math.PI*2/3+progress*2.5
+        const sx=ingredient.x+Math.cos(angle)*28,sy=ingredient.y+Math.sin(angle)*28
+        const x=sx+(effect.x-sx)*ease,y=sy+(effect.y-sy)*ease
+        fx.lineStyle(2,ingredient.kind==='melee'?0x7ae6cb:0x7ecbff,(1-progress)*.8);fx.lineBetween(x,y,effect.x,effect.y)
+        fx.fillStyle(color,1-progress);fx.fillCircle(x,y,7*(1-progress)+2)
+      }
+      fx.lineStyle(3,color,1-progress);fx.strokeCircle(effect.x,effect.y,24+progress*65)
+    }
     for(const ally of model.allies){
       if(ally.hp<=0)continue
-      if(ally.kind==='melee'&&model.rank('barrier')&&!(ally.barrierCd??0)){
+      if(ally.kind==='melee'&&!model.hasFlyingShield(ally)&&((model.rank('barrier')&&!(ally.barrierCd??0))||(companionForm(ally)==='bulwark'&&!(ally.guardShieldCd??0)))){
         fx.lineStyle(3,0x93e3f4,.75);fx.beginPath();fx.arc(ally.x,ally.y,35,ally.angle-.9,ally.angle+.9);fx.strokePath()
       }
       if((ally.shield??0)>0){fx.lineStyle(2,0xafeaff,.45+Math.sin(this.clock*4)*.15);fx.strokeCircle(ally.x,ally.y,39)}
@@ -206,22 +218,30 @@ export class StreetScene extends Phaser.Scene {
       visual.animation=new MonsterAnimator();visual.attackSeq=a.attackSeq
     }
     visual.elite=!!a.elite
-    if((a.elite||(a.weakened??0)>0)&&!visual.badge)visual.badge=this.add.text(a.x,a.y,'',{fontFamily:'"PingFang SC",sans-serif',fontSize:'11px',fontStyle:'bold',color:'#ffe0a3',stroke:'#392922',strokeThickness:4}).setOrigin(.5).setDepth(35)
-    if(!a.elite&&!(a.weakened??0)){visual.badge?.destroy();visual.badge=undefined}
-    const pose=visual.animation.update(dt,{running:running&&!(a.frozen??0),dx:a.x-visual.x,dy:a.y-visual.y,aimAngle:a.angle,attackAngle:a.attackSeq!==visual.attackSeq?a.angle:undefined})
+    if((a.elite||(a.weakened??0)>0||(ally&&a.tier>=2))&&!visual.badge)visual.badge=this.add.text(a.x,a.y,'',{fontFamily:'"PingFang SC",sans-serif',fontSize:'11px',fontStyle:'bold',color:'#ffe0a3',stroke:'#392922',strokeThickness:4}).setOrigin(.5).setDepth(35)
+    if(!a.elite&&!(a.weakened??0)&&!(ally&&a.tier>=2)){visual.badge?.destroy();visual.badge=undefined}
+    const pose=visual.animation.update(dt,{running:running&&!(a.frozen??0)&&!(a.mergeTime??0),dx:a.x-visual.x,dy:a.y-visual.y,aimAngle:a.angle,attackAngle:a.attackSeq!==visual.attackSeq?a.angle:undefined})
     visual.x=a.x;visual.y=a.y;visual.attackSeq=a.attackSeq
-    const size=a.elite?194+a.tier*18:ally?118+a.tier*12:132,color=ally?TEAM_COLORS.ally:TEAM_COLORS.enemy,depth=10+a.y*.001,slamPose=eliteSlamPose(a.slam),devolve=devolutionPose(a.weakened)
+    const size=a.elite?194+a.tier*18:ally?118+a.tier*12:132,color=ally?TEAM_COLORS.ally:TEAM_COLORS.enemy,depth=10+a.y*.001,slamPose=eliteSlamPose(a.slam),devolve=devolutionPose(a.weakened),fusion=fusionPose(a.mergeTime)
     const frame=a.slam?DIRECTIONS.indexOf(pose.direction)*8+slamPose.frame:pose.frame,originY=a.elite?.67:.5
-    const hit=hitReaction(a.hit,a.hitAngle),x=a.x+hit.x,y=a.y+hit.y+slamPose.lift,texture=a.elite?'monster-elite':`monster-${a.kind}`,filled=this.fillTexture(texture,color),widthScale=slamPose.scaleX*devolve.bodyScale,heightScale=slamPose.scaleY*devolve.bodyScale
-    visual.outline.setTexture(filled,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale*1.08,size*heightScale*1.08).setPosition(x,y).setDepth(depth).setTintFill(color).setAlpha((ally?.85:.64)*devolve.bodyAlpha)
-    visual.body.setTexture(hit.white?this.fillTexture(texture,0xffffff):texture,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale,size*heightScale).setPosition(x,y).setDepth(depth+.01).setAlpha(devolve.bodyAlpha)
+    const hit=hitReaction(a.hit,a.hitAngle),x=a.x+hit.x,y=a.y+hit.y+slamPose.lift,texture=a.elite?'monster-elite':`monster-${a.kind}`,filled=this.fillTexture(texture,color),widthScale=slamPose.scaleX*devolve.bodyScale*fusion.bodyScale,heightScale=slamPose.scaleY*devolve.bodyScale*fusion.bodyScale
+    visual.outline.setTexture(filled,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale*1.08,size*heightScale*1.08).setPosition(x,y).setDepth(depth).setTintFill(color).setAlpha((ally?.85:.64)*devolve.bodyAlpha*fusion.bodyAlpha)
+    visual.body.setTexture(hit.white?this.fillTexture(texture,0xffffff):texture,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale,size*heightScale).setPosition(x,y).setDepth(depth+.01).setAlpha(devolve.bodyAlpha*fusion.bodyAlpha)
     if(hit.white)visual.body.setTintFill(0xffffff);else visual.body.setTint(a.flash>0?0xffe9a4:ally?0xb3f3ff:0xffc3ae)
-    visual.wash.setTexture(filled,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale,size*heightScale).setPosition(x,y).setDepth(depth+.02).setTintFill(color).setAlpha((hit.white?0:ally?.4:.24)*devolve.bodyAlpha)
+    visual.wash.setTexture(filled,frame).setOrigin(.5,originY).setDisplaySize(size*widthScale,size*heightScale).setPosition(x,y).setDepth(depth+.02).setTintFill(color).setAlpha((hit.white?0:ally?.4:.24)*devolve.bodyAlpha*fusion.bodyAlpha)
     if(visual.shell){
       if(devolve.progress>=1){visual.shell.sprite.destroy();visual.shell=undefined}
       else {visual.shell.sprite.setPosition(a.x,a.y).setDisplaySize(visual.shell.width*devolve.shellScale,visual.shell.height*devolve.shellScale).setAlpha(devolve.shellAlpha).setDepth(depth+.03);this.fx.lineStyle(3*devolve.shellAlpha,0xffdc8a,devolve.shellAlpha);this.fx.strokeCircle(a.x,a.y,35+devolve.progress*65)}
     }
-    visual.badge?.setPosition(a.x,a.y-(a.elite?size*.69:70)).setText(a.elite?(a.slam?.phase==='windup'?`Lv.${a.tier} 重踏 · ${Math.max(0,ELITE_RULES.windup-a.slam.time).toFixed(1)}s`:`Lv.${a.tier} 震地精英 · 先破甲`):'一级普通怪 · 可捕获')
+    visual.badge?.setPosition(a.x,a.y-(a.elite?size*.69:70)).setText(a.elite?(a.slam?.phase==='windup'?`Lv.${a.tier} 重踏 · ${Math.max(0,ELITE_RULES.windup-a.slam.time).toFixed(1)}s`:`Lv.${a.tier} 震地精英 · 先破甲`):ally?`${companionName(a)} · ${a.tier}级`:'一级普通怪 · 可捕获')
+    if(ally&&a.tier>=2){
+      const form=companionForm(a),accent=COMPANIONS[form].color,x=a.x+Math.cos(a.angle)*28,y=a.y+Math.sin(a.angle)*28
+      this.fx.lineStyle(2,accent,.85*fusion.bodyAlpha)
+      if(form==='bulwark'&&!this.bridge.model.hasFlyingShield(a)){
+        this.fx.fillStyle(accent,.18*fusion.bodyAlpha);this.fx.fillTriangle(x-13,y-14,x+13,y-14,x,y+20)
+        this.fx.beginPath();this.fx.moveTo(x-13,y-14);this.fx.lineTo(x+13,y-14);this.fx.lineTo(x+11,y+8);this.fx.lineTo(x,y+20);this.fx.lineTo(x-11,y+8);this.fx.closePath();this.fx.strokePath()
+      }else if(form==='swordwind'){this.fx.lineBetween(x-12,y+12,x+14,y-14);this.fx.lineBetween(x-12,y+5,x-5,y+12)}
+    }
     const width=size*.48
     this.fx.fillStyle(color,ally?.12:.07);this.fx.fillEllipse(a.x,a.y+24,width+12,23)
     this.fx.lineStyle(ally?2.5:1.5,color,ally?.95:.65)
@@ -247,6 +267,7 @@ export class StreetScene extends Phaser.Scene {
     if(advancing)this.clock+=dt
     const k=this.keys
     if(advancing&&k?.Q&&Phaser.Input.Keyboard.JustDown(k.Q))model.cycleCapturePreference()
+    if(advancing&&k?.E&&Phaser.Input.Keyboard.JustDown(k.E))this.bridge.onFusion()
     const control:Control={x:(k?.D.isDown||k?.RIGHT.isDown?1:0)-(k?.A.isDown||k?.LEFT.isDown?1:0)+move.x,y:(k?.S.isDown||k?.DOWN.isDown?1:0)-(k?.W.isDown||k?.UP.isDown?1:0)+move.y,fire:!!(k?.F&&Phaser.Input.Keyboard.JustDown(k.F))||this.captureRequested||move.fire,dash:!!k?.SPACE.isDown||move.dash,rally:false}
     this.captureRequested=false;move.fire=false
     model.update(dt,control)
@@ -292,6 +313,18 @@ export class StreetScene extends Phaser.Scene {
       const angle=Math.atan2(bullet.vy,bullet.vx),phase=this.clock*22+bullet.id,color=bullet.team==='rope'?0xf0c990:bullet.frost?0xa0e9ff:TEAM_COLORS[bullet.team]
       const size=bullet.team==='rope'?54:30+Math.sin(phase)*2
       visual.sprite.setTint(bullet.frost?0xb8f1ff:0xffffff).setFrame(projectileFrame(bullet.team,this.clock,bullet.id)).setPosition(bullet.x,bullet.y).setDisplaySize(size,size).setRotation(angle+(bullet.team==='rope'?Math.sin(phase)*.08:this.clock*2)).setAlpha(bullet.returning?.84:1)
+      if(bullet.weapon){
+        visual.sprite.setVisible(false)
+        const color=bullet.weapon==='shield'?0xf3d28b:0xcbbcff
+        this.fx.lineStyle(bullet.weapon==='shield'?3:4,color,.95)
+        if(bullet.weapon==='shield'){
+          const radius=bullet.radius??20;this.fx.fillStyle(0x324b43,.9);this.fx.fillCircle(bullet.x,bullet.y,radius);this.fx.strokeCircle(bullet.x,bullet.y,radius)
+          const spin=this.clock*11;this.fx.lineBetween(bullet.x+Math.cos(spin)*radius*.65,bullet.y+Math.sin(spin)*radius*.65,bullet.x-Math.cos(spin)*radius*.65,bullet.y-Math.sin(spin)*radius*.65)
+        }else{
+          const radius=22+(bullet.radius??8);this.fx.beginPath();this.fx.arc(bullet.x-Math.cos(angle)*radius*.65,bullet.y-Math.sin(angle)*radius*.65,radius,angle-.9,angle+.9);this.fx.strokePath()
+          this.fx.lineStyle(2,0xf6eaff,.6);this.fx.beginPath();this.fx.arc(bullet.x-Math.cos(angle)*radius*.95,bullet.y-Math.sin(angle)*radius*.95,radius,angle-.8,angle+.8);this.fx.strokePath()
+        }
+      }
       for(let i=1;i<visual.trail.length;i++){
         const from=visual.trail[i-1],to=visual.trail[i]
         this.fx.lineStyle(1+i*.6,color,i/visual.trail.length*.35);this.fx.lineBetween(from.x,from.y,to.x,to.y)

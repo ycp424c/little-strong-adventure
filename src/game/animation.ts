@@ -51,6 +51,11 @@ export function devolutionPose(remaining=0) {
   const progress=Math.max(0,Math.min(1,(ELITE_RULES.devolveGrace-remaining)/ELITE_RULES.devolveAnimation)),ease=progress*progress*(3-2*progress)
   return {progress,bodyScale:.75+.25*ease,bodyAlpha:Math.min(1,progress*1.8),shellScale:1+progress*.16,shellAlpha:1-progress}
 }
+export function fusionPose(remaining=0) {
+  const progress=Math.max(0,Math.min(1,1-remaining/.65))
+  const reveal=Math.max(0,Math.min(1,(progress-.25)/.75)),ease=1-Math.pow(1-reveal,3)
+  return {progress,bodyAlpha:reveal,bodyScale:.65+.35*ease+Math.sin(reveal*Math.PI)*.12}
+}
 export function eliteSlamPose(slam?:Slam) {
   if(!slam)return {frame:0,scaleX:1,scaleY:1,lift:0}
   if(slam.phase==='windup'){

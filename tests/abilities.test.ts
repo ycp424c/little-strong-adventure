@@ -1,3 +1,4 @@
+import { recruitAndFuse } from './helpers.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ABILITIES, type AbilityId } from '../src/game/abilities.ts'
@@ -32,7 +33,7 @@ test('三选一始终含能力，已学能力未满级时提供续升机会',()=
 })
 test('能力等级与伙伴等级独立，合成和新捕获不会清空能力，重开清空',()=>{
   const m=arena();learn(m,'barrier',3)
-  for(let i=0;i<3;i++)m.recruit('melee')
+  recruitAndFuse(m,'melee',3)
   assert.equal(m.allies[0].tier,2);assert.equal(m.rank('barrier'),3)
   m.recruit('melee');assert.equal(m.rank('barrier'),3)
   assert.deepEqual(new GameModel().abilities,{})
@@ -115,7 +116,7 @@ test('救护优先低生命比例伙伴，三级溢出护盾吸收伤害后正�
 test('收编鼓舞刷新而非叠加持续时间，三级合成护盾不累计',()=>{
   const m=arena();learn(m,'inspire',3);m.recruit('melee');assert.equal(m.inspireTime,6)
   tick(m,1);m.recruit('melee');assert.equal(m.inspireTime,6)
-  m.recruit('melee');assert.equal(m.allies[0].shield,12);assert.equal(m.allies[0].shieldTime,5)
+  m.recruit('melee');m.openFusion();m.mergeRecipe('guard');assert.equal(m.allies[0].shield,12);assert.equal(m.allies[0].shieldTime,5)
   m.recruit('ranged');assert.equal(m.allies[1].shield??0,0)
 })
 test('能力弹射、爆裂与重击都保留瞄准目标和精英退化怪',()=>{
@@ -139,8 +140,8 @@ test('暂停和升级冻结能力冷却、护盾、冰冻、鼓舞与特效',()=
 test('所有能力满级与三级散射组合，长时间战斗遵守友弹和特效预算',()=>{
   const m=arena();for(const ability of ABILITIES)learn(m,ability.id,3)
   m.player.hp=m.player.maxHp=100000;m.capacity=10
-  for(let i=0;i<27;i++)m.recruit('ranged')
-  for(let i=0;i<9;i++)m.recruit('melee')
+  recruitAndFuse(m,'ranged',27)
+  recruitAndFuse(m,'melee',9)
   for(let i=0;i<40;i++)enemy(m,1800+i%8*40,760+Math.floor(i/8)*55,1000)
   for(let i=0;i<1200;i++){
     m.update(.05,idle)
