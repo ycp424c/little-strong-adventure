@@ -17,7 +17,9 @@ npm run build
 npm run preview
 ```
 
-部署到子路径时，构建时传入完整路径（以 `/` 结尾），例如：
+默认部署到 [Crossfadio 游戏入口](https://crossfadio.com/games/xiaoqiang/)，完整流程见 [部署说明](docs/deployment.md)。`CPD` / `RCPD` 的部署目标也遵循这个约定。
+
+构建时传入完整路径（以 `/` 结尾）：
 
 ```bash
 npm run build -- --base=/games/xiaoqiang/
